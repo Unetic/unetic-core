@@ -1,0 +1,17 @@
+name: Deploy development build
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    uses: Unetic/.github/.github/workflows/openwrt-package.yml@main
+    with:
+      package-name: unetic-core
+      build-kind: rust
+      deploy: true
+      service-name: unetic-core
+    secrets: inherit

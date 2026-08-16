@@ -1,0 +1,17 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    uses: Unetic/.github/.github/workflows/release.yml@main
+    with:
+      package-name: unetic-core
+      build-kind: rust
+    permissions:
+      contents: write
