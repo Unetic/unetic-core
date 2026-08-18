@@ -1,0 +1,26 @@
+{
+  "unetic": {
+    "description": "Access the Unetic control plane",
+    "read": {
+      "ubus": {
+        "unetic": [
+          "state",
+          "wifi.get",
+          "operation.get",
+          "maintenance.get",
+          "health.get",
+          ":subscribe"
+        ]
+      }
+    },
+    "write": {
+      "ubus": {
+        "unetic": [
+          "wifi.set_ssid",
+          "maintenance.enter",
+          "maintenance.exit"
+        ]
+      }
+    }
+  }
+}

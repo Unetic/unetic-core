@@ -1,21 +1,60 @@
 {
-  description = "Development environment for Unetic Core";
+  description = "Unetic Core development environment";
 
-  inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+  inputs = {
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 
-  outputs = { nixpkgs, ... }:
+    rust-overlay = {
+      url = "github:oxalica/rust-overlay";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
+  };
+
+  outputs =
+    { nixpkgs, rust-overlay, ... }:
     let
-      forEachSystem = nixpkgs.lib.genAttrs [ "aarch64-linux" "x86_64-linux" ];
+      systems = [
+        "x86_64-linux"
+        "aarch64-linux"
+      ];
+
+      forAllSystems =
+        f:
+        nixpkgs.lib.genAttrs systems (
+          system:
+          f system
+        );
     in
     {
-      devShells = forEachSystem (
+      devShells = forAllSystems (
         system:
         let
-          pkgs = nixpkgs.legacyPackages.${system};
+          pkgs = import nixpkgs {
+            inherit system;
+            overlays = [
+              rust-overlay.overlays.default
+            ];
+          };
+
+          rust = pkgs.rust-bin.stable.latest.default.override {
+            extensions = [
+              "rust-src"
+              "rust-analyzer"
+            ];
+          };
         in
         {
           default = pkgs.mkShell {
-            packages = with pkgs; [ cargo clippy rustc rustfmt stdenv.cc ];
+            name = "unetic-core";
+
+            packages = with pkgs; [
+              rust
+
+              pkg-config
+              openssl
+
+              cargo-watch
+            ];
           };
         }
       );

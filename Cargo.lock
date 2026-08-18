@@ -373,7 +373,12 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "ubus",
+ "unetic-openwrt-sys",
 ]
+
+[[package]]
+name = "unetic-openwrt-sys"
+version = "0.1.0"
 
 [[package]]
 name = "unicode-ident"
