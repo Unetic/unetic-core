@@ -2,11 +2,17 @@ name: CI
 
 on:
   push:
+    branches:
+      - "**"
   pull_request:
 
 permissions:
   contents: read
 
 jobs:
-  ci:
-    uses: Unetic/.github/.github/workflows/rust-ci.yml@afe9daad37b076fdcad596659682b00cc3c5248d
+  test:
+    uses: Unetic/packages/.github/workflows/reusable-rust.yml@main
+    with:
+      component_name: unetic-core
+      binary_name: unetic-core
+      release: false

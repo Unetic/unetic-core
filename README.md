@@ -1,68 +1,27 @@
 # Unetic Core
 
-The control plane behind [Unetic](https://github.com/Unetic).
+OpenWrt control-plane daemon for Unetic.
 
-`unetic-core` is a lightweight Rust daemon for OpenWrt. It owns Unetic's domain logic,
-maintains desired state and exposes the management API through OpenWrt's `ubus`.
-
-## Responsibilities
-
-- transactional configuration apply and rollback;
-- desired-state reconciliation and drift repair;
-- maintenance mode;
-- structured operation and error state;
-- ubus API and state notifications;
-- integration with OpenWrt configuration and runtime services.
-
-OpenWrt remains responsible for the networking stack itself: netifd, hostapd,
-dnsmasq, firewall4, nftables and the kernel.
-
-```text
-Unetic Web / CLI
-       │
-       ▼
-      ubus
-       │
-       ▼
-  unetic-core
-       │
-       ├── UCI / rpcd
-       ├── netifd
-       └── wireless
-```
+Repository: <https://github.com/Unetic/unetic-core>
 
 ## Development
 
-With Nix:
-
 ```sh
 nix develop
-```
-
-Checks:
-
-```sh
 cargo fmt --check
 cargo clippy --locked --all-targets --all-features -- -D warnings
 cargo test --locked --all-targets --all-features
+cargo build --locked --release --all-features
 ```
 
-## OpenWrt
+Normal pushes and pull requests run only these CI checks. They do not create APKs or GitHub Releases.
 
-OpenWrt runtime assets used by the distribution recipe live under `packaging/openwrt/`.
+## Release
 
-Production APKs are built and signed centrally by
-[`Unetic/packages`](https://github.com/Unetic/packages).
+A semantic tag `vX.Y.Z` must match the `Cargo.toml` package version. The release workflow runs CI first and, only after it passes, cross-builds the Rust binary for every OpenWrt target declared by `Unetic/packages/config/targets.json`.
 
-For local development, an unsigned APK can be installed manually:
+The component GitHub Release contains target-specific binaries and `SHA256SUMS`. It does **not** build the final APK.
 
-```sh
-scp unetic-core-*.apk root@router:/tmp/
-ssh root@router 'apk --allow-untrusted add /tmp/unetic-core-*.apk'
-```
+Production APK construction and signing are owned by `Unetic/packages`. A packages release with the same tag downloads the released core binary, compiles the small OpenWrt C bridge against the selected SDK, wraps both into an APK, signs the repository and publishes it.
 
-Use `--allow-untrusted` only for local development artifacts.
-
-## License
-
-GPL-2.0-only.
+Do not add Cargo compilation to the `Unetic/packages` APK Makefile.
