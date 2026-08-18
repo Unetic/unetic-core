@@ -1,3 +1,3 @@
 mod native;
 
-pub use native::OpenWrtBackend;
+pub use self::native::OpenWrtBackend;
