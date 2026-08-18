@@ -1,7 +1,6 @@
 [package]
 name = "unetic-core"
 version = "0.1.0"
-edition = "2024"
 description = "Unetic control plane for OpenWrt"
 repository = "https://github.com/Unetic/unetic-core"
 license = "GPL-2.0-only"
