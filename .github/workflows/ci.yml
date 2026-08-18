@@ -9,4 +9,4 @@ permissions:
 
 jobs:
   ci:
-    uses: Unetic/.github/.github/workflows/rust-ci.yml@main
+    uses: Unetic/.github/.github/workflows/rust-ci.yml@afe9daad37b076fdcad596659682b00cc3c5248d

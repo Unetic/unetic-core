@@ -49,7 +49,7 @@ cargo test --locked --all-targets --all-features
 
 ## OpenWrt
 
-The OpenWrt package recipe lives under `openwrt/`.
+OpenWrt runtime assets used by the distribution recipe live under `packaging/openwrt/`.
 
 Production APKs are built and signed centrally by
 [`Unetic/packages`](https://github.com/Unetic/packages).
