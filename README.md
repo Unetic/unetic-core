@@ -1,32 +1,68 @@
 # Unetic Core
 
-The OpenWrt control-plane daemon for Unetic. It will own domain logic and expose
-it to local clients over ubus.
+The control plane behind [Unetic](https://github.com/Unetic).
 
-Repository: <https://github.com/Unetic/unetic-core>
+`unetic-core` is a lightweight Rust daemon for OpenWrt. It owns Unetic's domain logic,
+maintains desired state and exposes the management API through OpenWrt's `ubus`.
+
+## Responsibilities
+
+- transactional configuration apply and rollback;
+- desired-state reconciliation and drift repair;
+- maintenance mode;
+- structured operation and error state;
+- ubus API and state notifications;
+- integration with OpenWrt configuration and runtime services.
+
+OpenWrt remains responsible for the networking stack itself: netifd, hostapd,
+dnsmasq, firewall4, nftables and the kernel.
+
+```text
+Unetic Web / CLI
+       │
+       ▼
+      ubus
+       │
+       ▼
+  unetic-core
+       │
+       ├── UCI / rpcd
+       ├── netifd
+       └── wireless
+```
 
 ## Development
 
+With Nix:
+
 ```sh
 nix develop
-cargo test
-cargo clippy --all-targets --all-features -- -D warnings
 ```
 
-## OpenWrt package
+Checks:
 
-CI smoke-tests `unetic-core` with the pinned OpenWrt 25.12.5 x86/64 SDK. Builds
-for a router must select its actual OpenWrt SDK target. The version comes from
-`Cargo.toml`; `openwrt/Makefile` only carries the packaging revision. Tagged
-releases use semantic version tags such as `v0.1.0` and attach the APK.
+```sh
+cargo fmt --check
+cargo clippy --locked --all-targets --all-features -- -D warnings
+cargo test --locked --all-targets --all-features
+```
 
-Install a downloaded development artifact with:
+## OpenWrt
+
+The OpenWrt package recipe lives under `openwrt/`.
+
+Production APKs are built and signed centrally by
+[`Unetic/packages`](https://github.com/Unetic/packages).
+
+For local development, an unsigned APK can be installed manually:
 
 ```sh
 scp unetic-core-*.apk root@router:/tmp/
-ssh root@router 'apk --allow-untrusted add /tmp/unetic-core-*.apk && rm -f /tmp/unetic-core-*.apk'
+ssh root@router 'apk --allow-untrusted add /tmp/unetic-core-*.apk'
 ```
 
-`--allow-untrusted` is only for local artifacts. A future public feed will be
-signed and installed through the normal `apk update && apk add unetic-core`
-path.
+Use `--allow-untrusted` only for local development artifacts.
+
+## License
+
+GPL-2.0-only.
