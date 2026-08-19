@@ -3,7 +3,7 @@ use std::{
     fs,
     sync::{
         Arc, Mutex,
-        atomic::{AtomicBool, AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
         mpsc::Sender,
     },
     thread,
@@ -69,7 +69,7 @@ pub struct App {
     pub(crate) inner: Mutex<Inner>,
     pub(crate) event_tx: Sender<PublicState>,
     pub(crate) shutdown: AtomicBool,
-    pub(crate) op_counter: AtomicU64,
+    pub(crate) op_counter: AtomicUsize,
     pub(crate) timing: Timing,
 }
 
@@ -162,7 +162,7 @@ impl App {
             }),
             event_tx,
             shutdown: AtomicBool::new(false),
-            op_counter: AtomicU64::new(1),
+            op_counter: AtomicUsize::new(1),
             timing,
         });
 
