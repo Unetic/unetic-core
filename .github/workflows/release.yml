@@ -12,7 +12,7 @@ on:
         type: string
 
 concurrency:
-  group: unetic-core-release-${{ inputs.tag || github.event.release.tag_name || github.ref_name }}
+  group: unetic-core-release-${{ inputs.tag || github.ref_name }}
   cancel-in-progress: false
 
 permissions:
@@ -25,4 +25,4 @@ jobs:
       component_name: unetic-core
       binary_name: unetic-core
       release: true
-      ref: ${{ inputs.tag || github.event.release.tag_name || github.ref_name }}
+      ref: ${{ inputs.tag || github.ref_name }}
