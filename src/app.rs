@@ -54,6 +54,7 @@ pub(crate) struct Inner {
     pub maintenance_reason: Option<String>,
     pub observed: BTreeMap<String, String>,
     pub runtime_healthy: bool,
+    pub wan: crate::model::WanPublicState,
     pub active_operation: Option<PublicOperation>,
     pub last_user_operation: Option<LastOperation>,
     pub last_system_error: Option<DomainError>,
@@ -91,10 +92,7 @@ impl App {
         let store_ready = store.ensure();
         let mut startup_error = store_ready.as_ref().err().cloned();
         let boot_id = generate_id("boot");
-        let last = store.load_last_operation().unwrap_or_else(|error| {
-            warn!(%error, "failed to load last operation");
-            None
-        });
+        let last = None;
 
         let (config, lifecycle) = match store.load_config() {
             Ok(Some(config)) if config.schema_version == 1 => (config, Lifecycle::Booting),
@@ -109,7 +107,11 @@ impl App {
             }
             Ok(None) => match backend.discover_primary_wifi() {
                 Ok(discovered) => {
-                    let config = DesiredConfig::new(discovered.ssid, discovered.targets);
+                    let wan = backend
+                        .discover_primary_wan()
+                        .map(|d| d.to_desired())
+                        .unwrap_or_default();
+                    let config = DesiredConfig::new(discovered.ssid, discovered.targets, wan);
                     match store.persist_config(&config) {
                         Ok(()) => (config, Lifecycle::Booting),
                         Err(error) => {
@@ -141,6 +143,8 @@ impl App {
             error!(%error, "failed to initialize persistent state directory");
         }
 
+        let wan_runtime = backend.read_wan_runtime_status().unwrap_or_default();
+
         let app = Arc::new(Self {
             backend,
             store,
@@ -152,6 +156,7 @@ impl App {
                 maintenance_reason: None,
                 observed: BTreeMap::new(),
                 runtime_healthy: false,
+                wan: wan_runtime,
                 active_operation: None,
                 last_user_operation: last,
                 last_system_error: startup_error,
@@ -336,7 +341,6 @@ impl App {
             error,
             finished_at_ms: now_ms(),
         };
-        self.store.persist_last_operation(&last)?;
         self.inner
             .lock()
             .expect("app state poisoned")
@@ -482,25 +486,6 @@ impl App {
         }
 
         self.refresh_observed();
-        let config = self
-            .inner
-            .lock()
-            .expect("app state poisoned")
-            .config
-            .clone();
-        if let Err(error) = self.store.persist_config(&config) {
-            error!(%error, "state store validation failed while leaving maintenance");
-            let mut inner = self.inner.lock().expect("app state poisoned");
-            inner.maintenance = false;
-            inner.maintenance_exiting = false;
-            inner.maintenance_reason = None;
-            inner.lifecycle = Lifecycle::Degraded;
-            inner.health.core = "error".into();
-            inner.last_system_error = Some(error.clone());
-            drop(inner);
-            self.publish();
-            return;
-        }
 
         {
             let mut inner = self.inner.lock().expect("app state poisoned");
@@ -671,6 +656,124 @@ impl App {
         })
     }
 
+    pub fn set_wan(
+        self: &Arc<Self>,
+        request: crate::model::SetWanRequest,
+    ) -> Result<OperationAccepted, DomainError> {
+        crate::wan::validate_wan_request(&request)?;
+
+        let context = {
+            let inner = self.inner.lock().expect("app state poisoned");
+
+            if inner.maintenance {
+                return Err(DomainError::new(
+                    ErrorCode::MaintenanceMode,
+                    ErrorStage::Validate,
+                    "Unetic is in maintenance mode",
+                ));
+            }
+            if inner.lifecycle != Lifecycle::Ready {
+                return Err(DomainError::new(
+                    ErrorCode::NotReady,
+                    ErrorStage::Validate,
+                    format!("core is not ready: {:?}", inner.lifecycle),
+                ));
+            }
+
+            if let Some(active) = &inner.active_operation {
+                if active.request_id.as_deref() == Some(&request.request_id) {
+                    return Ok(OperationAccepted {
+                        operation_id: active.id.clone(),
+                        status: active.status,
+                        noop: false,
+                    });
+                }
+                return Err(DomainError::new(
+                    ErrorCode::Busy,
+                    ErrorStage::Validate,
+                    "another configuration operation is active",
+                ));
+            }
+
+            if let Some(last) = &inner.last_user_operation
+                && last.request_id.as_deref() == Some(&request.request_id)
+            {
+                return Ok(OperationAccepted {
+                    operation_id: last.id.clone(),
+                    status: last.status,
+                    noop: false,
+                });
+            }
+
+            if request.expected_revision != inner.config.revision {
+                return Err(DomainError::new(
+                    ErrorCode::RevisionConflict,
+                    ErrorStage::Validate,
+                    "configuration changed since this client last synchronized",
+                )
+                .details(json!({
+                    "expected_revision": request.expected_revision,
+                    "current_revision": inner.config.revision
+                })));
+            }
+
+            if inner.config.wan == request.wan {
+                return Ok(OperationAccepted {
+                    operation_id: self.next_operation_id(),
+                    status: OperationStatus::Succeeded,
+                    noop: true,
+                });
+            }
+
+            crate::wan::WanChangeContext {
+                operation_id: self.next_operation_id(),
+                request_id: Some(request.request_id.clone()),
+                source: OperationSource::User,
+                base_revision: inner.config.revision,
+                target_revision: inner.config.revision + 1,
+                old_wan: inner.config.wan.clone(),
+                new_wan: request.wan.clone(),
+            }
+        };
+
+        let journal = context.to_journal(OperationStatus::Accepted);
+        self.store.persist_transaction(&journal).map_err(|error| {
+            error.with_operation(&context.operation_id, context.request_id.as_deref())
+        })?;
+
+        {
+            let mut inner = self.inner.lock().expect("app state poisoned");
+            inner.active_operation = Some(context.public(OperationStatus::Accepted, None));
+        }
+        self.publish();
+
+        let operation_id = context.operation_id.clone();
+        let app = Arc::clone(self);
+        let worker_context = context.clone();
+        if let Err(spawn_error) = thread::Builder::new()
+            .name(format!(
+                "unetic-wan-{}",
+                &operation_id[..operation_id.len().min(24)]
+            ))
+            .spawn(move || crate::wan::run_wan_change(app, worker_context))
+        {
+            let error = DomainError::new(
+                ErrorCode::Internal,
+                ErrorStage::Internal,
+                format!("failed to start transaction worker: {spawn_error}"),
+            )
+            .with_operation(&context.operation_id, context.request_id.as_deref());
+            self.complete_wan_failure(&context, error.clone(), false);
+            return Err(error);
+        }
+
+        Ok(OperationAccepted {
+            operation_id,
+            status: OperationStatus::Accepted,
+            noop: false,
+        })
+    }
+
     pub(crate) fn ensure_session(&self) -> Result<String, DomainError> {
         // A fresh short-lived rpcd session per transaction avoids stale session
         // state after rpcd restarts and keeps UCI staging isolated by operation.
@@ -682,25 +785,21 @@ impl App {
         context: &ChangeContext,
         status: OperationStatus,
         error: Option<DomainError>,
-        persist_journal: bool,
     ) -> Result<(), DomainError> {
-        // The accepted journal is the durability boundary. Later phase updates
-        // improve diagnostics but are not required for recovery, which is based
-        // on base/target revisions and desired state.
-        if persist_journal
-            && context.source == OperationSource::User
-            && let Err(store_error) = self.store.persist_transaction(&context.to_journal(status))
-        {
-            warn!(
-                %store_error,
-                operation_id = %context.operation_id,
-                "failed to persist transaction phase; continuing with accepted journal"
-            );
-        }
+        self.set_operation_status_with_kind(&context.operation_id, "wifi.set_ssid", status, error)
+    }
+
+    pub(crate) fn set_operation_status_with_kind(
+        &self,
+        operation_id: &str,
+        _kind: &str,
+        status: OperationStatus,
+        error: Option<DomainError>,
+    ) -> Result<(), DomainError> {
         {
             let mut inner = self.inner.lock().expect("app state poisoned");
             if let Some(active) = &mut inner.active_operation
-                && active.id == context.operation_id
+                && active.id == operation_id
             {
                 active.status = status;
                 active.error = error;
@@ -745,15 +844,11 @@ impl App {
         };
 
         let mut completion_store_error = None;
-        if context.source == OperationSource::User {
-            if let Err(error) = self.store.persist_last_operation(&last) {
-                error!(%error, "configuration was committed but last-operation persistence failed");
-                completion_store_error = Some(error);
-            }
-            if let Err(error) = self.store.clear_transaction() {
-                error!(%error, "configuration was committed but transaction journal cleanup failed");
-                completion_store_error.get_or_insert(error);
-            }
+        if context.source == OperationSource::User
+            && let Err(error) = self.store.clear_transaction()
+        {
+            error!(%error, "configuration was committed but transaction journal cleanup failed");
+            completion_store_error = Some(error);
         }
 
         {
@@ -821,15 +916,12 @@ impl App {
         };
 
         let mut store_failed = false;
-        if context.source == OperationSource::User {
-            if let Err(store_error) = self.store.persist_last_operation(&last) {
-                error!(%store_error, "failed to persist last operation");
-                store_failed = true;
-            }
-            if !rollback_failed && let Err(store_error) = self.store.clear_transaction() {
-                error!(%store_error, "failed to clear transaction journal");
-                store_failed = true;
-            }
+        if context.source == OperationSource::User
+            && !rollback_failed
+            && let Err(store_error) = self.store.clear_transaction()
+        {
+            error!(%store_error, "failed to clear transaction journal");
+            store_failed = true;
         }
 
         {
@@ -840,7 +932,7 @@ impl App {
                     inner.last_system_error = Some(DomainError::new(
                         ErrorCode::StateStoreFailed,
                         ErrorStage::Persist,
-                        "failed to persist operation result",
+                        "failed to clear transaction journal",
                     ));
                 }
             } else {
@@ -888,9 +980,196 @@ impl App {
             finished_at_ms: now_ms(),
         };
 
-        if context.source == OperationSource::User {
-            let _ = self.store.persist_last_operation(&last);
+        {
+            let mut inner = self.inner.lock().expect("app state poisoned");
+            if context.source == OperationSource::User {
+                inner.last_user_operation = Some(last);
+            }
+            inner.active_operation = None;
+            inner.lifecycle = Lifecycle::Degraded;
+            inner.health.core = "error".into();
+            inner.last_system_error = Some(uncertain.clone());
         }
+        self.publish();
+    }
+
+    pub(crate) fn persist_new_desired_wan(
+        &self,
+        context: &crate::wan::WanChangeContext,
+    ) -> Result<(), DomainError> {
+        let mut config = {
+            let inner = self.inner.lock().expect("app state poisoned");
+            inner.config.clone()
+        };
+        config.revision = context.target_revision;
+        config.wan = context.new_wan.clone();
+
+        self.store.persist_config(&config)?;
+        {
+            let mut inner = self.inner.lock().expect("app state poisoned");
+            inner.config = config;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn complete_wan_success(
+        &self,
+        context: &crate::wan::WanChangeContext,
+    ) -> Result<(), DomainError> {
+        let revision = self
+            .inner
+            .lock()
+            .expect("app state poisoned")
+            .config
+            .revision;
+        let last = LastOperation {
+            id: context.operation_id.clone(),
+            request_id: context.request_id.clone(),
+            source: context.source,
+            kind: "wan.set_config".into(),
+            status: OperationStatus::Succeeded,
+            revision,
+            requested_ssid: String::new(),
+            error: None,
+            finished_at_ms: now_ms(),
+        };
+
+        let mut completion_store_error = None;
+        if context.source == OperationSource::User
+            && let Err(error) = self.store.clear_transaction()
+        {
+            error!(%error, "configuration was committed but transaction journal cleanup failed");
+            completion_store_error = Some(error);
+        }
+
+        let wan_status = self.backend.read_wan_runtime_status().unwrap_or_default();
+        {
+            let mut inner = self.inner.lock().expect("app state poisoned");
+            if context.source == OperationSource::User {
+                inner.last_user_operation = Some(last);
+            }
+            inner.active_operation = None;
+            inner.wan = wan_status;
+            inner.repair_failures = 0;
+            if let Some(store_error) = completion_store_error {
+                inner.lifecycle = Lifecycle::Degraded;
+                inner.health.core = "error".into();
+                inner.last_system_error = Some(store_error);
+            } else {
+                if !inner.maintenance {
+                    inner.lifecycle = Lifecycle::Ready;
+                }
+                inner.health.core = "ok".into();
+                if context.source != OperationSource::User {
+                    inner.last_system_error = None;
+                }
+            }
+            inner.health.wan = "ok".into();
+        }
+        self.publish();
+        Ok(())
+    }
+
+    pub(crate) fn complete_wan_failure(
+        &self,
+        context: &crate::wan::WanChangeContext,
+        error: DomainError,
+        rollback_failed: bool,
+    ) {
+        let error = error.with_operation(&context.operation_id, context.request_id.as_deref());
+        let revision = self
+            .inner
+            .lock()
+            .expect("app state poisoned")
+            .config
+            .revision;
+        let last = LastOperation {
+            id: context.operation_id.clone(),
+            request_id: context.request_id.clone(),
+            source: context.source,
+            kind: "wan.set_config".into(),
+            status: if rollback_failed {
+                OperationStatus::RollbackFailed
+            } else {
+                OperationStatus::Failed
+            },
+            revision,
+            requested_ssid: String::new(),
+            error: Some(error.clone()),
+            finished_at_ms: now_ms(),
+        };
+
+        let mut store_failed = false;
+        if context.source == OperationSource::User
+            && !rollback_failed
+            && let Err(store_error) = self.store.clear_transaction()
+        {
+            error!(%store_error, "failed to clear transaction journal");
+            store_failed = true;
+        }
+
+        let wan_status = self.backend.read_wan_runtime_status().unwrap_or_default();
+        {
+            let mut inner = self.inner.lock().expect("app state poisoned");
+            if context.source == OperationSource::User {
+                inner.last_user_operation = Some(last);
+                if store_failed {
+                    inner.last_system_error = Some(DomainError::new(
+                        ErrorCode::StateStoreFailed,
+                        ErrorStage::Persist,
+                        "failed to clear transaction journal",
+                    ));
+                }
+            } else {
+                inner.repair_failures = inner.repair_failures.saturating_add(1);
+                inner.last_system_error = Some(error.clone());
+            }
+            inner.active_operation = None;
+            inner.wan = wan_status;
+            if rollback_failed || store_failed || inner.repair_failures >= 3 {
+                inner.lifecycle = Lifecycle::Degraded;
+                inner.health.core = "error".into();
+            }
+            inner.health.wan = "error".into();
+        }
+        self.refresh_observed();
+        self.publish();
+    }
+
+    pub(crate) fn mark_wan_commit_uncertain(
+        &self,
+        context: &crate::wan::WanChangeContext,
+        error: DomainError,
+    ) {
+        let uncertain = DomainError::new(
+            ErrorCode::CommitUncertain,
+            ErrorStage::Confirm,
+            format!(
+                "desired state is durable, but UCI confirm failed: {}",
+                error.message
+            ),
+        )
+        .retryable(true)
+        .with_operation(&context.operation_id, context.request_id.as_deref());
+
+        let revision = self
+            .inner
+            .lock()
+            .expect("app state poisoned")
+            .config
+            .revision;
+        let last = LastOperation {
+            id: context.operation_id.clone(),
+            request_id: context.request_id.clone(),
+            source: context.source,
+            kind: "wan.set_config".into(),
+            status: OperationStatus::Failed,
+            revision,
+            requested_ssid: String::new(),
+            error: Some(uncertain.clone()),
+            finished_at_ms: now_ms(),
+        };
+
         {
             let mut inner = self.inner.lock().expect("app state poisoned");
             if context.source == OperationSource::User {
@@ -924,8 +1203,18 @@ impl App {
             )
         };
 
+        let wan_status = self.backend.read_wan_runtime_status().unwrap_or_default();
+        let mut wan_changed = false;
+        {
+            let mut inner = self.inner.lock().expect("app state poisoned");
+            if inner.wan != wan_status {
+                inner.wan = wan_status;
+                wan_changed = true;
+            }
+        }
+
         if targets.is_empty() {
-            return false;
+            return wan_changed;
         }
 
         match self.backend.read_ssids(&targets, None) {
@@ -943,6 +1232,7 @@ impl App {
                 let changed = inner.observed != observed
                     || inner.runtime_healthy != runtime
                     || inner.health.wireless != wireless_health
+                    || wan_changed
                     || runtime_error
                         .as_ref()
                         .is_some_and(|error| inner.last_system_error.as_ref() != Some(error));
@@ -958,6 +1248,7 @@ impl App {
                 warn!(%error, "failed to observe wireless config");
                 let mut inner = self.inner.lock().expect("app state poisoned");
                 let changed = inner.health.wireless != "error"
+                    || wan_changed
                     || inner.last_system_error.as_ref() != Some(&error);
                 inner.health.wireless = "error".into();
                 inner.last_system_error = Some(error);
@@ -1191,6 +1482,7 @@ fn snapshot(inner: &Inner) -> PublicState {
             observed: inner.observed.clone(),
             status: wifi_status,
         },
+        wan: inner.wan.clone(),
         active_operation: inner.active_operation.clone(),
         last_user_operation: inner.last_user_operation.clone(),
         last_system_error: inner.last_system_error.clone(),

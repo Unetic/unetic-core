@@ -5,7 +5,7 @@ use serde_json::{Map, Value, json};
 use crate::{
     backend::RouterBackend,
     errors::{DomainError, ErrorCode, ErrorStage},
-    model::DiscoveredWifi,
+    model::{DiscoveredWan, DiscoveredWifi, WanDesired, WanPublicState},
 };
 
 pub struct OpenWrtBackend;
@@ -79,7 +79,9 @@ impl OpenWrtBackend {
                 "scope": "uci",
                 "objects": [
                     ["wireless", "read"],
-                    ["wireless", "write"]
+                    ["wireless", "write"],
+                    ["network", "read"],
+                    ["network", "write"]
                 ]
             }),
         )?;
@@ -92,8 +94,18 @@ impl OpenWrtBackend {
         option: Option<&str>,
         session: Option<&str>,
     ) -> Result<Value, DomainError> {
+        self.uci_get_config("wireless", section, option, session)
+    }
+
+    fn uci_get_config(
+        &self,
+        config: &str,
+        section: Option<&str>,
+        option: Option<&str>,
+        session: Option<&str>,
+    ) -> Result<Value, DomainError> {
         let mut request = Map::new();
-        request.insert("config".into(), Value::String("wireless".into()));
+        request.insert("config".into(), Value::String(config.into()));
         if let Some(section) = section {
             request.insert("section".into(), Value::String(section.into()));
         }
@@ -230,7 +242,72 @@ impl RouterBackend for OpenWrtBackend {
         Ok(())
     }
 
+    fn discover_primary_wan(&self) -> Result<DiscoveredWan, DomainError> {
+        let response = match self.uci_get_config("network", Some("wan"), None, None) {
+            Ok(res) => res,
+            Err(error) if error.code == ErrorCode::UciReadFailed => {
+                return Ok(DiscoveredWan {
+                    present: false,
+                    proto: crate::model::WanProtocol::None,
+                    ..DiscoveredWan::default()
+                });
+            }
+            Err(error) => return Err(error),
+        };
+        Ok(super::wan::parse_discovered_wan(&response))
+    }
+
+    fn read_wan_config(&self, session: Option<&str>) -> Result<WanDesired, DomainError> {
+        let response = match self.uci_get_config("network", Some("wan"), None, session) {
+            Ok(res) => res,
+            Err(error) if error.code == ErrorCode::UciReadFailed => {
+                return Ok(WanDesired::default());
+            }
+            Err(error) => return Err(error),
+        };
+        Ok(super::wan::parse_discovered_wan(&response).to_desired())
+    }
+
+    fn stage_wan_config(&self, session: &str, config: &WanDesired) -> Result<(), DomainError> {
+        let values = super::wan::build_wan_staging_values(config);
+        self.call(
+            "uci",
+            "set",
+            json!({
+                "config": "network",
+                "section": "wan",
+                "values": values,
+                "ubus_rpc_session": session
+            }),
+        )
+        .map(|_| ())
+        .map_err(|error| {
+            DomainError::new(ErrorCode::UciStageFailed, ErrorStage::Stage, error.message)
+                .retryable(error.retryable)
+        })
+    }
+
+    fn read_wan_runtime_status(&self) -> Result<WanPublicState, DomainError> {
+        let response = match self.call("network.interface.wan", "status", json!({})) {
+            Ok(res) => res,
+            Err(_) => {
+                return Ok(WanPublicState {
+                    present: false,
+                    proto: crate::model::WanProtocol::None,
+                    status: crate::model::WanStatus::NotConfigured,
+                    ..Default::default()
+                });
+            }
+        };
+        Ok(super::wan::parse_wan_runtime_status(&response))
+    }
+
     fn revert_staged(&self, session: &str) -> Result<(), DomainError> {
+        let _ = self.call(
+            "uci",
+            "revert",
+            json!({"config": "network", "ubus_rpc_session": session}),
+        );
         self.call(
             "uci",
             "revert",

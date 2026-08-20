@@ -15,6 +15,7 @@ pub mod model;
 pub mod openwrt;
 pub mod storage;
 pub mod transaction;
+pub mod wan;
 
 pub use app::{App, Timing};
 pub use backend::{MemoryBackend, RouterBackend};

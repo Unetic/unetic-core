@@ -75,7 +75,7 @@ fn execute(app: &Arc<App>, context: &ChangeContext) -> Result<(), DomainError> {
         error.with_operation(&context.operation_id, context.request_id.as_deref())
     })?;
 
-    app.set_operation_status(context, OperationStatus::Staging, None, true)?;
+    app.set_operation_status(context, OperationStatus::Staging, None)?;
     if let Err(error) = app
         .backend
         .stage_ssid(&session, &context.targets, &context.new_ssid)
@@ -113,7 +113,7 @@ fn execute(app: &Arc<App>, context: &ChangeContext) -> Result<(), DomainError> {
         return Ok(());
     }
 
-    app.set_operation_status(context, OperationStatus::Applying, None, true)?;
+    app.set_operation_status(context, OperationStatus::Applying, None)?;
     if let Err(error) = app
         .backend
         .apply(&session, app.timing.rpcd_rollback_timeout_secs)
@@ -127,7 +127,7 @@ fn execute(app: &Arc<App>, context: &ChangeContext) -> Result<(), DomainError> {
         return Ok(());
     }
 
-    app.set_operation_status(context, OperationStatus::Verifying, None, true)?;
+    app.set_operation_status(context, OperationStatus::Verifying, None)?;
     if let Err(error) = verify(
         app,
         &context.targets,
@@ -139,14 +139,14 @@ fn execute(app: &Arc<App>, context: &ChangeContext) -> Result<(), DomainError> {
     }
 
     if context.source == OperationSource::User {
-        app.set_operation_status(context, OperationStatus::Persisting, None, true)?;
+        app.set_operation_status(context, OperationStatus::Persisting, None)?;
         if let Err(error) = app.persist_new_desired(context) {
             rollback_to_old(app, context, &session, attach(error, context));
             return Ok(());
         }
     }
 
-    app.set_operation_status(context, OperationStatus::Confirming, None, true)?;
+    app.set_operation_status(context, OperationStatus::Confirming, None)?;
     if let Err(error) = app.backend.confirm(&session) {
         if context.source == OperationSource::User {
             app.mark_commit_uncertain(context, error);
@@ -172,7 +172,6 @@ fn rollback_to_old(
         context,
         OperationStatus::RollingBack,
         Some(original_error.clone()),
-        true,
     );
 
     if let Err(rollback_error) = app.backend.rollback(session) {

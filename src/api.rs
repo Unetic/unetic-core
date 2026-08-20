@@ -38,6 +38,7 @@ pub fn dispatch(app: &Arc<App>, method: &str, request_json: &str) -> String {
     let response = match method {
         "state" => Ok(json!(app.state())),
         "wifi.get" => Ok(json!(app.wifi_get())),
+        "wan.get" => Ok(json!(app.state().wan)),
         "operation.get" => Ok(app.last_or_active_operation()),
         "maintenance.get" => Ok(json!(app.maintenance_get())),
         "health.get" => Ok(json!(app.health())),
@@ -50,6 +51,17 @@ pub fn dispatch(app: &Arc<App>, method: &str, request_json: &str) -> String {
                 )
             })
             .and_then(|request| app.set_ssid(request).map(|result| json!(result))),
+        "wan.set" | "wan.set_config" => {
+            serde_json::from_value::<crate::model::SetWanRequest>(request)
+                .map_err(|error| {
+                    DomainError::new(
+                        ErrorCode::InvalidArgument,
+                        ErrorStage::Validate,
+                        format!("invalid wan.set request: {error}"),
+                    )
+                })
+                .and_then(|request| app.set_wan(request).map(|result| json!(result)))
+        }
         "maintenance.enter" => {
             let reason = request
                 .get("reason")

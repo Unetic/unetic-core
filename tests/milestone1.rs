@@ -297,6 +297,7 @@ fn crash_recovery_reports_interrupted_uncommitted_user_operation() {
         .persist_config(&DesiredConfig::new(
             "Home".into(),
             vec!["default_radio0".into(), "default_radio1".into()],
+            unetic_core::model::WanDesired::default(),
         ))
         .expect("desired state");
     store
@@ -346,6 +347,7 @@ fn crash_recovery_finishes_durable_user_intent() {
     let mut desired = DesiredConfig::new(
         "New".into(),
         vec!["default_radio0".into(), "default_radio1".into()],
+        unetic_core::model::WanDesired::default(),
     );
     desired.revision = 2;
     store.persist_config(&desired).expect("desired state");
@@ -369,4 +371,197 @@ fn crash_recovery_finishes_durable_user_intent() {
     let last = app.state().last_user_operation.expect("recovered result");
     assert_eq!(last.status, OperationStatus::Succeeded);
     assert_eq!(last.revision, 2);
+}
+
+#[test]
+fn validation_rejects_invalid_ssids_and_handles_noop() {
+    let (app, _) = test_app();
+
+    let empty_err = app
+        .set_ssid(SetSsidRequest {
+            ssid: "".into(),
+            expected_revision: 1,
+            request_id: "req-empty".into(),
+        })
+        .expect_err("empty SSID rejected");
+    assert_eq!(empty_err.code, ErrorCode::InvalidArgument);
+
+    let too_long_err = app
+        .set_ssid(SetSsidRequest {
+            ssid: "a".repeat(33),
+            expected_revision: 1,
+            request_id: "req-too-long".into(),
+        })
+        .expect_err("33-byte SSID rejected");
+    assert_eq!(too_long_err.code, ErrorCode::InvalidArgument);
+
+    let nul_err = app
+        .set_ssid(SetSsidRequest {
+            ssid: "Hello\0World".into(),
+            expected_revision: 1,
+            request_id: "req-nul".into(),
+        })
+        .expect_err("NUL byte SSID rejected");
+    assert_eq!(nul_err.code, ErrorCode::InvalidArgument);
+
+    let valid_32 = app
+        .set_ssid(SetSsidRequest {
+            ssid: "a".repeat(32),
+            expected_revision: 1,
+            request_id: "req-32".into(),
+        })
+        .expect("32-byte SSID accepted");
+    assert_eq!(valid_32.status, OperationStatus::Accepted);
+    assert!(!valid_32.noop);
+
+    wait_for_idle(&app);
+
+    let noop = app
+        .set_ssid(SetSsidRequest {
+            ssid: "a".repeat(32),
+            expected_revision: 2,
+            request_id: "req-noop".into(),
+        })
+        .expect("same SSID is accepted as no-op");
+    assert_eq!(noop.status, OperationStatus::Succeeded);
+    assert!(noop.noop);
+    assert_eq!(app.state().revision, 2);
+}
+
+#[test]
+fn stage_failure_leaves_desired_and_router_unchanged() {
+    let (app, backend) = test_app();
+    backend.set_failure_plan(FailurePlan {
+        fail_stage: true,
+        ..FailurePlan::default()
+    });
+
+    app.set_ssid(SetSsidRequest {
+        ssid: "StageFail".into(),
+        expected_revision: 1,
+        request_id: "req-stage-fail".into(),
+    })
+    .expect("accepted");
+
+    wait_for_idle(&app);
+    let state = app.state();
+    assert_eq!(state.wifi.ssid, "Home");
+    assert_eq!(state.revision, 1);
+    assert_eq!(
+        state
+            .last_user_operation
+            .as_ref()
+            .expect("last operation")
+            .status,
+        OperationStatus::Failed
+    );
+    assert!(
+        backend
+            .committed_ssids()
+            .values()
+            .all(|ssid| ssid == "Home")
+    );
+}
+
+#[test]
+fn verify_failure_rolls_back_to_old_state() {
+    let (app, backend) = test_app();
+    backend.set_failure_plan(FailurePlan {
+        fail_candidate_verify: true,
+        ..FailurePlan::default()
+    });
+
+    app.set_ssid(SetSsidRequest {
+        ssid: "VerifyFail".into(),
+        expected_revision: 1,
+        request_id: "req-verify-fail".into(),
+    })
+    .expect("accepted");
+
+    wait_for_idle(&app);
+    let state = app.state();
+    assert_eq!(state.wifi.ssid, "Home");
+    assert_eq!(state.revision, 1);
+    assert_eq!(
+        state
+            .last_user_operation
+            .as_ref()
+            .expect("last operation")
+            .status,
+        OperationStatus::Failed
+    );
+    assert!(
+        backend
+            .committed_ssids()
+            .values()
+            .all(|ssid| ssid == "Home")
+    );
+}
+
+#[test]
+fn rollback_failure_transitions_to_degraded() {
+    let (app, backend) = test_app();
+    backend.set_failure_plan(FailurePlan {
+        runtime_unhealthy: true,
+        fail_rollback: true,
+        ..FailurePlan::default()
+    });
+
+    app.set_ssid(SetSsidRequest {
+        ssid: "RollbackFail".into(),
+        expected_revision: 1,
+        request_id: "req-rb-fail".into(),
+    })
+    .expect("accepted");
+
+    wait_for_idle(&app);
+    let state = app.state();
+    assert_eq!(state.lifecycle, Lifecycle::Degraded);
+    assert_eq!(
+        state
+            .last_user_operation
+            .as_ref()
+            .expect("last operation")
+            .status,
+        OperationStatus::RollbackFailed
+    );
+}
+
+#[test]
+fn bootstrap_without_targets_sets_lifecycle_needs_setup() {
+    let backend = Arc::new(MemoryBackend::new("Home", &[]));
+    let (tx, _rx) = mpsc::channel();
+    let root = std::env::temp_dir().join(format!(
+        "unetic-test-bootstrap-{}",
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos()
+    ));
+    let app = App::bootstrap(backend, StateStore::new(root), tx);
+    assert_eq!(app.state().lifecycle, Lifecycle::NeedsSetup);
+}
+
+#[test]
+fn concurrency_rejects_second_concurrent_operation_with_busy() {
+    let (app, _) = test_app();
+    let first = app
+        .set_ssid(SetSsidRequest {
+            ssid: "First".into(),
+            expected_revision: 1,
+            request_id: "req-first".into(),
+        })
+        .expect("first accepted");
+    assert_eq!(first.status, OperationStatus::Accepted);
+
+    let second_err = app
+        .set_ssid(SetSsidRequest {
+            ssid: "Second".into(),
+            expected_revision: 1,
+            request_id: "req-second".into(),
+        })
+        .expect_err("second operation must be rejected with BUSY while first is active");
+    assert_eq!(second_err.code, ErrorCode::Busy);
+
+    wait_for_idle(&app);
 }

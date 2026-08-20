@@ -52,6 +52,9 @@ struct Library {
     handle: *mut c_void,
 }
 
+unsafe impl Send for Library {}
+unsafe impl Sync for Library {}
+
 impl Drop for Library {
     fn drop(&mut self) {
         if !self.handle.is_null() {

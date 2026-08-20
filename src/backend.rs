@@ -5,11 +5,12 @@ use std::{
 
 use crate::{
     errors::{DomainError, ErrorCode, ErrorStage},
-    model::DiscoveredWifi,
+    model::{DiscoveredWan, DiscoveredWifi, WanDesired, WanProtocol, WanPublicState, WanStatus},
 };
 
 pub trait RouterBackend: Send + Sync {
     fn discover_primary_wifi(&self) -> Result<DiscoveredWifi, DomainError>;
+    fn discover_primary_wan(&self) -> Result<DiscoveredWan, DomainError>;
     fn create_session(&self) -> Result<String, DomainError>;
     fn read_ssids(
         &self,
@@ -17,6 +18,9 @@ pub trait RouterBackend: Send + Sync {
         session: Option<&str>,
     ) -> Result<BTreeMap<String, String>, DomainError>;
     fn stage_ssid(&self, session: &str, targets: &[String], ssid: &str) -> Result<(), DomainError>;
+    fn read_wan_config(&self, session: Option<&str>) -> Result<WanDesired, DomainError>;
+    fn stage_wan_config(&self, session: &str, config: &WanDesired) -> Result<(), DomainError>;
+    fn read_wan_runtime_status(&self) -> Result<WanPublicState, DomainError>;
     fn revert_staged(&self, session: &str) -> Result<(), DomainError>;
     fn apply(&self, session: &str, rollback_timeout_secs: u32) -> Result<(), DomainError>;
     fn confirm(&self, session: &str) -> Result<(), DomainError>;
@@ -31,14 +35,19 @@ pub struct FailurePlan {
     pub fail_apply: bool,
     pub fail_confirm: bool,
     pub fail_rollback: bool,
+    pub fail_candidate_verify: bool,
     pub runtime_unhealthy: bool,
 }
 
 #[derive(Debug)]
 struct MemoryState {
     committed: BTreeMap<String, String>,
+    wan_committed: WanDesired,
     sessions: HashMap<String, BTreeMap<String, String>>,
+    wan_sessions: HashMap<String, WanDesired>,
     rollback_snapshots: HashMap<String, BTreeMap<String, String>>,
+    wan_rollback_snapshots: HashMap<String, WanDesired>,
+    wan_runtime: WanPublicState,
     next_session: u64,
     failure: FailurePlan,
 }
@@ -51,15 +60,70 @@ pub struct MemoryBackend {
 impl MemoryBackend {
     #[must_use]
     pub fn new(ssid: &str, targets: &[&str]) -> Self {
+        Self::with_wan(
+            ssid,
+            targets,
+            WanDesired {
+                present: true,
+                proto: WanProtocol::Dhcp,
+                device: Some("eth1".into()),
+                custom_mac: None,
+                custom_mtu: None,
+                custom_dns: Vec::new(),
+                static_config: None,
+                pppoe_config: None,
+            },
+        )
+    }
+
+    #[must_use]
+    pub fn with_wan(ssid: &str, targets: &[&str], wan: WanDesired) -> Self {
         let committed = targets
             .iter()
             .map(|target| ((*target).to_owned(), ssid.to_owned()))
             .collect();
+        let wan_runtime = WanPublicState {
+            present: wan.present,
+            proto: wan.proto,
+            status: if wan.present {
+                WanStatus::Connected
+            } else {
+                WanStatus::NotConfigured
+            },
+            device: wan.device.clone(),
+            ip_address: if wan.present {
+                Some("203.0.113.10".into())
+            } else {
+                None
+            },
+            netmask: if wan.present {
+                Some("255.255.255.0".into())
+            } else {
+                None
+            },
+            gateway: if wan.present {
+                Some("203.0.113.1".into())
+            } else {
+                None
+            },
+            dns: if wan.present {
+                vec!["1.1.1.1".into(), "1.0.0.1".into()]
+            } else {
+                Vec::new()
+            },
+            mac_address: Some("00:11:22:33:44:55".into()),
+            uptime_secs: 1200,
+            error_reason: None,
+        };
         Self {
             state: Mutex::new(MemoryState {
                 committed,
+                wan_committed: wan,
                 sessions: HashMap::new(),
+                wan_sessions: HashMap::new(),
                 rollback_snapshots: HashMap::new(),
+                wan_rollback_snapshots: HashMap::new(),
+                wan_runtime,
                 next_session: 1,
                 failure: FailurePlan::default(),
             }),
@@ -112,12 +176,28 @@ impl RouterBackend for MemoryBackend {
         })
     }
 
+    fn discover_primary_wan(&self) -> Result<DiscoveredWan, DomainError> {
+        let state = self.state.lock().expect("memory backend poisoned");
+        Ok(DiscoveredWan {
+            present: state.wan_committed.present,
+            device: state.wan_committed.device.clone(),
+            proto: state.wan_committed.proto,
+            custom_mac: state.wan_committed.custom_mac.clone(),
+            custom_mtu: state.wan_committed.custom_mtu,
+            custom_dns: state.wan_committed.custom_dns.clone(),
+            static_config: state.wan_committed.static_config.clone(),
+            pppoe_config: state.wan_committed.pppoe_config.clone(),
+        })
+    }
+
     fn create_session(&self) -> Result<String, DomainError> {
         let mut state = self.state.lock().expect("memory backend poisoned");
         let sid = format!("memory-session-{}", state.next_session);
         state.next_session += 1;
         let committed = state.committed.clone();
         state.sessions.insert(sid.clone(), committed);
+        let wan_committed = state.wan_committed.clone();
+        state.wan_sessions.insert(sid.clone(), wan_committed);
         Ok(sid)
     }
 
@@ -176,10 +256,42 @@ impl RouterBackend for MemoryBackend {
         Ok(())
     }
 
+    fn read_wan_config(&self, session: Option<&str>) -> Result<WanDesired, DomainError> {
+        let state = self.state.lock().expect("memory backend poisoned");
+        if let Some(session) = session
+            && let Some(staged) = state.wan_sessions.get(session)
+        {
+            return Ok(staged.clone());
+        }
+        Ok(state.wan_committed.clone())
+    }
+
+    fn stage_wan_config(&self, session: &str, config: &WanDesired) -> Result<(), DomainError> {
+        let mut state = self.state.lock().expect("memory backend poisoned");
+        if state.failure.fail_stage {
+            return Err(DomainError::new(
+                ErrorCode::UciStageFailed,
+                ErrorStage::Stage,
+                "injected stage failure",
+            ));
+        }
+        state
+            .wan_sessions
+            .insert(session.to_owned(), config.clone());
+        Ok(())
+    }
+
+    fn read_wan_runtime_status(&self) -> Result<WanPublicState, DomainError> {
+        let state = self.state.lock().expect("memory backend poisoned");
+        Ok(state.wan_runtime.clone())
+    }
+
     fn revert_staged(&self, session: &str) -> Result<(), DomainError> {
         let mut state = self.state.lock().expect("memory backend poisoned");
         let committed = state.committed.clone();
         state.sessions.insert(session.to_owned(), committed);
+        let wan_committed = state.wan_committed.clone();
+        state.wan_sessions.insert(session.to_owned(), wan_committed);
         Ok(())
     }
 
@@ -204,6 +316,17 @@ impl RouterBackend for MemoryBackend {
             .rollback_snapshots
             .insert(session.to_owned(), snapshot);
         state.committed = staged;
+
+        let wan_staged = state
+            .wan_sessions
+            .get(session)
+            .cloned()
+            .unwrap_or_else(|| state.wan_committed.clone());
+        let wan_snapshot = state.wan_committed.clone();
+        state
+            .wan_rollback_snapshots
+            .insert(session.to_owned(), wan_snapshot);
+        state.wan_committed = wan_staged;
         Ok(())
     }
 
@@ -217,6 +340,7 @@ impl RouterBackend for MemoryBackend {
             ));
         }
         state.rollback_snapshots.remove(session);
+        state.wan_rollback_snapshots.remove(session);
         Ok(())
     }
 
@@ -233,16 +357,22 @@ impl RouterBackend for MemoryBackend {
             state.committed = snapshot.clone();
             state.sessions.insert(session.to_owned(), snapshot);
         }
+        if let Some(wan_snapshot) = state.wan_rollback_snapshots.remove(session) {
+            state.wan_committed = wan_snapshot.clone();
+            state.wan_sessions.insert(session.to_owned(), wan_snapshot);
+        }
         Ok(())
     }
 
     fn runtime_healthy(&self, _targets: &[String], _ssid: &str) -> Result<bool, DomainError> {
-        Ok(!self
-            .state
-            .lock()
-            .expect("memory backend poisoned")
-            .failure
-            .runtime_unhealthy)
+        let state = self.state.lock().expect("memory backend poisoned");
+        if state.failure.runtime_unhealthy {
+            return Ok(false);
+        }
+        if state.failure.fail_candidate_verify && !state.rollback_snapshots.is_empty() {
+            return Ok(false);
+        }
+        Ok(true)
     }
 
     fn reload_wireless_runtime(&self) -> Result<(), DomainError> {

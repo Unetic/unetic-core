@@ -8,7 +8,7 @@ use serde::{Serialize, de::DeserializeOwned};
 
 use crate::{
     errors::{DomainError, ErrorCode, ErrorStage},
-    model::{DesiredConfig, LastOperation, TransactionJournal},
+    model::{DesiredConfig, TransactionJournal},
 };
 
 #[derive(Debug, Clone)]
@@ -29,7 +29,7 @@ impl StateStore {
             use std::os::unix::fs::PermissionsExt;
             fs::set_permissions(&self.root, fs::Permissions::from_mode(0o700))
                 .map_err(store_error)?;
-            for name in ["config.json", "transaction.json", "last-operation.json"] {
+            for name in ["config.json", "transaction.json"] {
                 let path = self.root.join(name);
                 if path.exists() {
                     fs::set_permissions(path, fs::Permissions::from_mode(0o600))
@@ -63,14 +63,6 @@ impl StateStore {
             Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
             Err(error) => Err(store_error(error)),
         }
-    }
-
-    pub fn load_last_operation(&self) -> Result<Option<LastOperation>, DomainError> {
-        self.read_json("last-operation.json")
-    }
-
-    pub fn persist_last_operation(&self, value: &LastOperation) -> Result<(), DomainError> {
-        self.write_json("last-operation.json", value)
     }
 
     fn read_json<T: DeserializeOwned>(&self, name: &str) -> Result<Option<T>, DomainError> {
