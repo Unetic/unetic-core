@@ -10,7 +10,9 @@ use unetic_core::{
     App, MemoryBackend, RouterBackend, StateStore, Timing,
     backend::FailurePlan,
     errors::ErrorCode,
-    model::{Lifecycle, OperationStatus, SetSsidRequest},
+    model::{
+        Lifecycle, OperationStatus, SetWifiConfigRequest, WifiNetworkConfig,
+    },
 };
 
 fn test_app() -> (Arc<App>, Arc<MemoryBackend>) {
@@ -53,8 +55,10 @@ fn wait_for_idle(app: &App) {
 fn successful_change_updates_desired_and_router() {
     let (app, backend) = test_app();
     let accepted = app
-        .set_ssid(SetSsidRequest {
+        .wifi_set_config(SetWifiConfigRequest {
             ssid: "New Home".into(),
+            encryption: "none".into(),
+            key: None,
             expected_revision: 1,
             request_id: "request-1".into(),
         })
@@ -64,6 +68,7 @@ fn successful_change_updates_desired_and_router() {
     wait_for_idle(&app);
     let state = app.state();
     assert_eq!(state.wifi.ssid, "New Home");
+    assert_eq!(state.wifi.encryption, "none");
     assert_eq!(state.revision, 2);
     assert_eq!(
         state
@@ -82,11 +87,91 @@ fn successful_change_updates_desired_and_router() {
 }
 
 #[test]
+fn successful_wifi_config_with_encryption_and_password() {
+    let (app, backend) = test_app();
+    let accepted = app
+        .wifi_set_config(SetWifiConfigRequest {
+            ssid: "SecureHome".into(),
+            encryption: "psk2".into(),
+            key: Some("supersecret123".into()),
+            expected_revision: 1,
+            request_id: "request-sec-1".into(),
+        })
+        .expect("accepted");
+    assert_eq!(accepted.status, OperationStatus::Accepted);
+
+    wait_for_idle(&app);
+    let state = app.state();
+    assert_eq!(state.wifi.ssid, "SecureHome");
+    assert_eq!(state.wifi.encryption, "psk2");
+    assert_eq!(state.wifi.key.as_deref(), Some("supersecret123"));
+    assert_eq!(state.revision, 2);
+
+    let committed = backend.committed_configs();
+    for config in committed.values() {
+        assert_eq!(config.ssid, "SecureHome");
+        assert_eq!(config.encryption, "psk2");
+        assert_eq!(config.key.as_deref(), Some("supersecret123"));
+    }
+}
+
+#[test]
+fn validation_encryption_requires_valid_key() {
+    let (app, _) = test_app();
+
+    let missing_key = app
+        .wifi_set_config(SetWifiConfigRequest {
+            ssid: "SecureHome".into(),
+            encryption: "psk2".into(),
+            key: None,
+            expected_revision: 1,
+            request_id: "req-missing-key".into(),
+        })
+        .expect_err("must reject missing key for non-none encryption");
+    assert_eq!(missing_key.code, ErrorCode::InvalidArgument);
+
+    let short_key = app
+        .wifi_set_config(SetWifiConfigRequest {
+            ssid: "SecureHome".into(),
+            encryption: "psk2".into(),
+            key: Some("short".into()),
+            expected_revision: 1,
+            request_id: "req-short-key".into(),
+        })
+        .expect_err("must reject key shorter than 8 chars");
+    assert_eq!(short_key.code, ErrorCode::InvalidArgument);
+
+    let long_key = app
+        .wifi_set_config(SetWifiConfigRequest {
+            ssid: "SecureHome".into(),
+            encryption: "psk2".into(),
+            key: Some("a".repeat(64)),
+            expected_revision: 1,
+            request_id: "req-long-key".into(),
+        })
+        .expect_err("must reject key longer than 63 chars");
+    assert_eq!(long_key.code, ErrorCode::InvalidArgument);
+
+    let valid_8 = app
+        .wifi_set_config(SetWifiConfigRequest {
+            ssid: "SecureHome".into(),
+            encryption: "psk2".into(),
+            key: Some("12345678".into()),
+            expected_revision: 1,
+            request_id: "req-valid-8".into(),
+        })
+        .expect("accepted 8-char key");
+    assert_eq!(valid_8.status, OperationStatus::Accepted);
+}
+
+#[test]
 fn stale_revision_is_rejected_without_changing_router() {
     let (app, backend) = test_app();
     let error = app
-        .set_ssid(SetSsidRequest {
+        .wifi_set_config(SetWifiConfigRequest {
             ssid: "Other".into(),
+            encryption: "none".into(),
+            key: None,
             expected_revision: 99,
             request_id: "request-stale".into(),
         })
@@ -109,8 +194,10 @@ fn apply_failure_returns_authoritative_old_state() {
         ..FailurePlan::default()
     });
 
-    app.set_ssid(SetSsidRequest {
+    app.wifi_set_config(SetWifiConfigRequest {
         ssid: "Broken".into(),
+        encryption: "none".into(),
+        key: None,
         expected_revision: 1,
         request_id: "request-fail".into(),
     })
@@ -142,7 +229,7 @@ fn maintenance_suppresses_repair_then_exit_repairs_drift() {
     app.start_background();
     app.maintenance_enter(Some("test".into()))
         .expect("enter maintenance");
-    backend.external_set("default_radio0", "Manual");
+    backend.external_set_ssid("default_radio0", "Manual");
 
     thread::sleep(Duration::from_millis(80));
     assert_eq!(
@@ -180,19 +267,23 @@ fn maintenance_suppresses_repair_then_exit_repairs_drift() {
 #[test]
 fn same_request_id_is_idempotent_while_active_or_finished() {
     let (app, _) = test_app();
-    let request = SetSsidRequest {
+    let request = SetWifiConfigRequest {
         ssid: "One".into(),
+        encryption: "none".into(),
+        key: None,
         expected_revision: 1,
         request_id: "same-id".into(),
     };
-    let first = app.set_ssid(request.clone()).expect("first accepted");
-    let second = app.set_ssid(request).expect("duplicate accepted");
+    let first = app.wifi_set_config(request.clone()).expect("first accepted");
+    let second = app.wifi_set_config(request).expect("duplicate accepted");
     assert_eq!(first.operation_id, second.operation_id);
 
     wait_for_idle(&app);
     let duplicate = app
-        .set_ssid(SetSsidRequest {
+        .wifi_set_config(SetWifiConfigRequest {
             ssid: "One".into(),
+            encryption: "none".into(),
+            key: None,
             expected_revision: 1,
             request_id: "same-id".into(),
         })
@@ -203,16 +294,20 @@ fn same_request_id_is_idempotent_while_active_or_finished() {
 #[test]
 fn reusing_request_id_for_different_intent_is_rejected() {
     let (app, _) = test_app();
-    let request = SetSsidRequest {
+    let request = SetWifiConfigRequest {
         ssid: "One".into(),
+        encryption: "none".into(),
+        key: None,
         expected_revision: 1,
         request_id: "same-id-different-intent".into(),
     };
-    app.set_ssid(request).expect("first accepted");
+    app.wifi_set_config(request).expect("first accepted");
 
     let error = app
-        .set_ssid(SetSsidRequest {
+        .wifi_set_config(SetWifiConfigRequest {
             ssid: "Two".into(),
+            encryption: "none".into(),
+            key: None,
             expected_revision: 1,
             request_id: "same-id-different-intent".into(),
         })
@@ -257,7 +352,7 @@ fn api_keeps_domain_errors_in_structured_success_payload() {
     let (app, _) = test_app();
     let raw = unetic_core::api::dispatch(
         &app,
-        "wifi.set_ssid",
+        "wifi.set_config",
         r#"{"ssid":"","expected_revision":1,"request_id":"bad"}"#,
     );
     let value: serde_json::Value = serde_json::from_str(&raw).expect("valid JSON envelope");
@@ -295,8 +390,12 @@ fn crash_recovery_reports_interrupted_uncommitted_user_operation() {
     let store = StateStore::new(root);
     store
         .persist_config(&DesiredConfig::new(
-            "Home".into(),
-            vec!["default_radio0".into(), "default_radio1".into()],
+            WifiNetworkConfig {
+                ssid: "Home".into(),
+                encryption: "none".into(),
+                key: None,
+                targets: vec!["default_radio0".into(), "default_radio1".into()],
+            },
             unetic_core::model::WanDesired::default(),
         ))
         .expect("desired state");
@@ -310,6 +409,10 @@ fn crash_recovery_reports_interrupted_uncommitted_user_operation() {
             target_revision: 2,
             old_ssid: "Home".into(),
             new_ssid: "New".into(),
+            old_encryption: "none".into(),
+            new_encryption: "none".into(),
+            old_key: None,
+            new_key: None,
             targets: vec!["default_radio0".into(), "default_radio1".into()],
             phase: OperationStatus::Applying,
         })
@@ -345,8 +448,12 @@ fn crash_recovery_finishes_durable_user_intent() {
     ));
     let store = StateStore::new(root);
     let mut desired = DesiredConfig::new(
-        "New".into(),
-        vec!["default_radio0".into(), "default_radio1".into()],
+        WifiNetworkConfig {
+            ssid: "New".into(),
+            encryption: "none".into(),
+            key: None,
+            targets: vec!["default_radio0".into(), "default_radio1".into()],
+        },
         unetic_core::model::WanDesired::default(),
     );
     desired.revision = 2;
@@ -361,6 +468,10 @@ fn crash_recovery_finishes_durable_user_intent() {
             target_revision: 2,
             old_ssid: "Home".into(),
             new_ssid: "New".into(),
+            old_encryption: "none".into(),
+            new_encryption: "none".into(),
+            old_key: None,
+            new_key: None,
             targets: vec!["default_radio0".into(), "default_radio1".into()],
             phase: OperationStatus::Confirming,
         })
@@ -378,8 +489,10 @@ fn validation_rejects_invalid_ssids_and_handles_noop() {
     let (app, _) = test_app();
 
     let empty_err = app
-        .set_ssid(SetSsidRequest {
+        .wifi_set_config(SetWifiConfigRequest {
             ssid: "".into(),
+            encryption: "none".into(),
+            key: None,
             expected_revision: 1,
             request_id: "req-empty".into(),
         })
@@ -387,8 +500,10 @@ fn validation_rejects_invalid_ssids_and_handles_noop() {
     assert_eq!(empty_err.code, ErrorCode::InvalidArgument);
 
     let too_long_err = app
-        .set_ssid(SetSsidRequest {
+        .wifi_set_config(SetWifiConfigRequest {
             ssid: "a".repeat(33),
+            encryption: "none".into(),
+            key: None,
             expected_revision: 1,
             request_id: "req-too-long".into(),
         })
@@ -396,8 +511,10 @@ fn validation_rejects_invalid_ssids_and_handles_noop() {
     assert_eq!(too_long_err.code, ErrorCode::InvalidArgument);
 
     let nul_err = app
-        .set_ssid(SetSsidRequest {
+        .wifi_set_config(SetWifiConfigRequest {
             ssid: "Hello\0World".into(),
+            encryption: "none".into(),
+            key: None,
             expected_revision: 1,
             request_id: "req-nul".into(),
         })
@@ -405,8 +522,10 @@ fn validation_rejects_invalid_ssids_and_handles_noop() {
     assert_eq!(nul_err.code, ErrorCode::InvalidArgument);
 
     let valid_32 = app
-        .set_ssid(SetSsidRequest {
+        .wifi_set_config(SetWifiConfigRequest {
             ssid: "a".repeat(32),
+            encryption: "none".into(),
+            key: None,
             expected_revision: 1,
             request_id: "req-32".into(),
         })
@@ -417,8 +536,10 @@ fn validation_rejects_invalid_ssids_and_handles_noop() {
     wait_for_idle(&app);
 
     let noop = app
-        .set_ssid(SetSsidRequest {
+        .wifi_set_config(SetWifiConfigRequest {
             ssid: "a".repeat(32),
+            encryption: "none".into(),
+            key: None,
             expected_revision: 2,
             request_id: "req-noop".into(),
         })
@@ -436,8 +557,10 @@ fn stage_failure_leaves_desired_and_router_unchanged() {
         ..FailurePlan::default()
     });
 
-    app.set_ssid(SetSsidRequest {
+    app.wifi_set_config(SetWifiConfigRequest {
         ssid: "StageFail".into(),
+        encryption: "none".into(),
+        key: None,
         expected_revision: 1,
         request_id: "req-stage-fail".into(),
     })
@@ -471,8 +594,10 @@ fn verify_failure_rolls_back_to_old_state() {
         ..FailurePlan::default()
     });
 
-    app.set_ssid(SetSsidRequest {
+    app.wifi_set_config(SetWifiConfigRequest {
         ssid: "VerifyFail".into(),
+        encryption: "none".into(),
+        key: None,
         expected_revision: 1,
         request_id: "req-verify-fail".into(),
     })
@@ -507,8 +632,10 @@ fn rollback_failure_transitions_to_degraded() {
         ..FailurePlan::default()
     });
 
-    app.set_ssid(SetSsidRequest {
+    app.wifi_set_config(SetWifiConfigRequest {
         ssid: "RollbackFail".into(),
+        encryption: "none".into(),
+        key: None,
         expected_revision: 1,
         request_id: "req-rb-fail".into(),
     })
@@ -546,8 +673,10 @@ fn bootstrap_without_targets_sets_lifecycle_needs_setup() {
 fn concurrency_rejects_second_concurrent_operation_with_busy() {
     let (app, _) = test_app();
     let first = app
-        .set_ssid(SetSsidRequest {
+        .wifi_set_config(SetWifiConfigRequest {
             ssid: "First".into(),
+            encryption: "none".into(),
+            key: None,
             expected_revision: 1,
             request_id: "req-first".into(),
         })
@@ -555,8 +684,10 @@ fn concurrency_rejects_second_concurrent_operation_with_busy() {
     assert_eq!(first.status, OperationStatus::Accepted);
 
     let second_err = app
-        .set_ssid(SetSsidRequest {
+        .wifi_set_config(SetWifiConfigRequest {
             ssid: "Second".into(),
+            encryption: "none".into(),
+            key: None,
             expected_revision: 1,
             request_id: "req-second".into(),
         })

@@ -5,7 +5,7 @@ use serde_json::{Value, json};
 use super::rpc::{call_ubus, uci_get_config};
 use crate::{
     errors::{DomainError, ErrorCode, ErrorStage},
-    model::DiscoveredWifi,
+    model::{DiscoveredWifi, WifiNetworkConfig},
 };
 
 pub fn discover_primary_wifi() -> Result<DiscoveredWifi, DomainError> {
@@ -48,7 +48,16 @@ pub fn discover_primary_wifi() -> Result<DiscoveredWifi, DomainError> {
         if ssid.is_empty() {
             continue;
         }
-        candidates.push((name.clone(), ssid.to_owned()));
+        let encryption = section
+            .get("encryption")
+            .and_then(Value::as_str)
+            .unwrap_or("none")
+            .to_owned();
+        let key = section
+            .get("key")
+            .and_then(Value::as_str)
+            .map(str::to_owned);
+        candidates.push((name.clone(), ssid.to_owned(), encryption, key));
     }
 
     if candidates.is_empty() {
@@ -59,30 +68,47 @@ pub fn discover_primary_wifi() -> Result<DiscoveredWifi, DomainError> {
         ));
     }
 
-    let first = candidates[0].1.clone();
-    if candidates.iter().any(|(_, ssid)| ssid != &first) {
+    let first_ssid = candidates[0].1.clone();
+    let first_enc = candidates[0].2.clone();
+    let first_key = candidates[0].3.clone();
+    if candidates
+        .iter()
+        .any(|(_, ssid, enc, key)| ssid != &first_ssid || enc != &first_enc || key != &first_key)
+    {
         return Err(DomainError::new(
             ErrorCode::AmbiguousWifiConfig,
             ErrorStage::Bootstrap,
-            "LAN AP wifi-iface sections use different SSIDs",
+            "LAN AP wifi-iface sections use different wireless settings",
         ));
     }
 
     Ok(DiscoveredWifi {
-        ssid: first,
-        targets: candidates.into_iter().map(|(name, _)| name).collect(),
+        ssid: first_ssid,
+        encryption: first_enc,
+        key: first_key,
+        targets: candidates.into_iter().map(|(name, _, _, _)| name).collect(),
     })
 }
 
-pub fn read_ssids(
+pub fn read_wifi_configs(
     targets: &[String],
     session: Option<&str>,
-) -> Result<BTreeMap<String, String>, DomainError> {
+) -> Result<BTreeMap<String, WifiNetworkConfig>, DomainError> {
     let mut result = BTreeMap::new();
     for target in targets {
-        let response = uci_get_config("wireless", Some(target), Some("ssid"), session)?;
-        let ssid = response
-            .get("value")
+        let response = uci_get_config("wireless", Some(target), None, session)?;
+        let values = response
+            .get("values")
+            .and_then(Value::as_object)
+            .ok_or_else(|| {
+                DomainError::new(
+                    ErrorCode::TargetMissing,
+                    ErrorStage::Verify,
+                    format!("target {target} has no UCI values table"),
+                )
+            })?;
+        let ssid = values
+            .get("ssid")
             .and_then(Value::as_str)
             .ok_or_else(|| {
                 DomainError::new(
@@ -90,21 +116,55 @@ pub fn read_ssids(
                     ErrorStage::Verify,
                     format!("target {target} has no SSID option"),
                 )
-            })?;
-        result.insert(target.clone(), ssid.to_owned());
+            })?
+            .to_owned();
+        let encryption = values
+            .get("encryption")
+            .and_then(Value::as_str)
+            .unwrap_or("none")
+            .to_owned();
+        let key = values
+            .get("key")
+            .and_then(Value::as_str)
+            .map(str::to_owned);
+
+        result.insert(
+            target.clone(),
+            WifiNetworkConfig {
+                ssid,
+                encryption,
+                key,
+                targets: vec![target.clone()],
+            },
+        );
     }
     Ok(result)
 }
 
-pub fn stage_ssid(session: &str, targets: &[String], ssid: &str) -> Result<(), DomainError> {
+
+
+pub fn stage_wifi_config(
+    session: &str,
+    targets: &[String],
+    config: &WifiNetworkConfig,
+) -> Result<(), DomainError> {
     for target in targets {
+        let mut values = serde_json::Map::new();
+        values.insert("ssid".into(), json!(config.ssid));
+        values.insert("encryption".into(), json!(config.encryption));
+        if config.encryption != "none" {
+            if let Some(key) = &config.key {
+                values.insert("key".into(), json!(key));
+            }
+        }
+
         call_ubus(
             "uci",
             "set",
             json!({
                 "config": "wireless",
                 "section": target,
-                "values": {"ssid": ssid},
+                "values": values,
                 "ubus_rpc_session": session
             }),
         )
@@ -113,6 +173,19 @@ pub fn stage_ssid(session: &str, targets: &[String], ssid: &str) -> Result<(), D
             DomainError::new(ErrorCode::UciStageFailed, ErrorStage::Stage, error.message)
                 .retryable(error.retryable)
         })?;
+
+        if config.encryption == "none" || config.key.is_none() {
+            let _ = call_ubus(
+                "uci",
+                "delete",
+                json!({
+                    "config": "wireless",
+                    "section": target,
+                    "option": "key",
+                    "ubus_rpc_session": session
+                }),
+            );
+        }
     }
     Ok(())
 }

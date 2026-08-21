@@ -6,7 +6,7 @@ use std::{
 
 use tracing::warn;
 
-use super::{App, state::all_equal};
+use super::{App, state::all_equal_config};
 use crate::{
     errors::{DomainError, ErrorCode, ErrorStage},
     model::{Lifecycle, OperationSource, OperationStatus},
@@ -57,10 +57,10 @@ impl App {
 
         let repair = {
             let mut inner = self.inner.lock().expect("app state poisoned");
-            let config_drift = !all_equal(
-                &inner.observed,
+            let config_drift = !all_equal_config(
+                &inner.observed_configs,
                 &inner.config.wifi.primary.targets,
-                &inner.config.wifi.primary.ssid,
+                &inner.config.wifi.primary,
             );
             let wan_drift = observed_wan
                 .as_ref()
@@ -103,8 +103,8 @@ impl App {
                     source: OperationSource::Reconcile,
                     base_revision: inner.config.revision,
                     target_revision: inner.config.revision,
-                    old_ssid: inner.config.wifi.primary.ssid.clone(),
-                    new_ssid: inner.config.wifi.primary.ssid.clone(),
+                    old_wifi: inner.config.wifi.primary.clone(),
+                    new_wifi: inner.config.wifi.primary.clone(),
                     targets: inner.config.wifi.primary.targets.clone(),
                 };
                 inner.active_operation = Some(context.public(OperationStatus::Accepted, None));
@@ -128,8 +128,8 @@ impl App {
                     source: OperationSource::Reconcile,
                     base_revision: inner.config.revision,
                     target_revision: inner.config.revision,
-                    old_ssid: inner.config.wifi.primary.ssid.clone(),
-                    new_ssid: inner.config.wifi.primary.ssid.clone(),
+                    old_wifi: inner.config.wifi.primary.clone(),
+                    new_wifi: inner.config.wifi.primary.clone(),
                     targets: inner.config.wifi.primary.targets.clone(),
                 };
                 inner.active_operation = Some(context.public(OperationStatus::Accepted, None));

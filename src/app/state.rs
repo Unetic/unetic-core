@@ -6,92 +6,18 @@ use std::{
 };
 
 use serde_json::json;
-use tracing::{info, warn};
+use tracing::warn;
 
 use super::{App, Inner};
 use crate::{
     errors::{DomainError, ErrorCode, ErrorStage},
     model::{
-        API_VERSION, DriftState, MaintenanceState, OperationSource, OperationStatus, PublicState,
-        TransactionJournal, WifiPublicState, WifiStatus,
+        API_VERSION, DriftState, MaintenanceState, PublicState, WifiNetworkConfig,
+        WifiPublicState, WifiStatus,
     },
-    transaction,
 };
 
 impl App {
-    pub(crate) fn recover_from_journal(
-        &self,
-        journal: &TransactionJournal,
-    ) -> Result<(), DomainError> {
-        let config = self
-            .inner
-            .lock()
-            .expect("app state poisoned")
-            .config
-            .clone();
-
-        if config.revision == journal.base_revision && config.wifi.primary.ssid == journal.old_ssid
-        {
-            info!(
-                operation_id = %journal.operation_id,
-                "recovering interrupted transaction to old desired state"
-            );
-            transaction::force_state_sync(
-                self,
-                &journal.targets,
-                &journal.old_ssid,
-                OperationSource::Recovery,
-            )?;
-            self.record_recovered_operation(
-                journal,
-                OperationStatus::Failed,
-                journal.base_revision,
-                Some(
-                    DomainError::new(
-                        ErrorCode::OperationInterrupted,
-                        ErrorStage::Bootstrap,
-                        "operation was interrupted by a core restart and rolled back",
-                    )
-                    .with_operation(&journal.operation_id, Some(&journal.request_id)),
-                ),
-            );
-            self.store.clear_transaction()?;
-            self.refresh_observed();
-            return Ok(());
-        }
-
-        if config.revision == journal.target_revision
-            && config.wifi.primary.ssid == journal.new_ssid
-        {
-            info!(
-                operation_id = %journal.operation_id,
-                "confirming committed desired state after restart"
-            );
-            transaction::force_state_sync(
-                self,
-                &journal.targets,
-                &journal.new_ssid,
-                OperationSource::Recovery,
-            )?;
-            self.record_recovered_operation(
-                journal,
-                OperationStatus::Succeeded,
-                journal.target_revision,
-                None,
-            );
-            self.store.clear_transaction()?;
-            self.refresh_observed();
-            return Ok(());
-        }
-
-        warn!(
-            operation_id = %journal.operation_id,
-            "transaction journal does not match durable desired state; clearing journal"
-        );
-        self.store.clear_transaction()?;
-        self.refresh_observed();
-        Ok(())
-    }
     pub(crate) fn publish(&self) -> PublicState {
         let state = {
             let mut inner = self.inner.lock().expect("app state poisoned");
@@ -112,7 +38,7 @@ impl App {
             let inner = self.inner.lock().expect("app state poisoned");
             (
                 inner.config.wifi.primary.targets.clone(),
-                inner.config.wifi.primary.ssid.clone(),
+                inner.config.wifi.primary.clone(),
             )
         };
 
@@ -130,26 +56,32 @@ impl App {
             return wan_changed;
         }
 
-        match self.backend.read_ssids(&targets, None) {
-            Ok(observed) => {
+        match self.backend.read_wifi_configs(&targets, None) {
+            Ok(observed_configs) => {
                 let (runtime, runtime_error) =
-                    match self.backend.runtime_healthy(&targets, &desired) {
+                    match self.backend.runtime_healthy(&targets, &desired.ssid) {
                         Ok(value) => (value, None),
                         Err(error) => {
                             warn!(%error, "failed to observe wireless runtime");
                             (false, Some(error))
                         }
                     };
+                let observed_ssids: BTreeMap<String, String> = observed_configs
+                    .iter()
+                    .map(|(t, c)| (t.clone(), c.ssid.clone()))
+                    .collect();
                 let mut inner = self.inner.lock().expect("app state poisoned");
                 let wireless_health = if runtime { "ok" } else { "error" };
-                let changed = inner.observed != observed
+                let changed = inner.observed_configs != observed_configs
+                    || inner.observed != observed_ssids
                     || inner.runtime_healthy != runtime
                     || inner.health.wireless != wireless_health
                     || wan_changed
                     || runtime_error
                         .as_ref()
                         .is_some_and(|error| inner.last_system_error.as_ref() != Some(error));
-                inner.observed = observed;
+                inner.observed = observed_ssids;
+                inner.observed_configs = observed_configs;
                 inner.runtime_healthy = runtime;
                 inner.health.wireless = wireless_health.into();
                 if let Some(error) = runtime_error {
@@ -173,12 +105,22 @@ impl App {
 
 pub(crate) fn snapshot(inner: &Inner) -> PublicState {
     let desired = &inner.config.wifi.primary;
-    let mut drift_fields: Vec<String> = desired
-        .targets
-        .iter()
-        .filter(|target| inner.observed.get(*target) != Some(&desired.ssid))
-        .map(|target| format!("wifi.primary.targets.{target}.ssid"))
-        .collect();
+    let mut drift_fields: Vec<String> = Vec::new();
+    for target in &desired.targets {
+        if let Some(obs) = inner.observed_configs.get(target) {
+            if obs.ssid != desired.ssid {
+                drift_fields.push(format!("wifi.primary.targets.{target}.ssid"));
+            }
+            if obs.encryption != desired.encryption {
+                drift_fields.push(format!("wifi.primary.targets.{target}.encryption"));
+            }
+            if obs.key != desired.key {
+                drift_fields.push(format!("wifi.primary.targets.{target}.key"));
+            }
+        } else {
+            drift_fields.push(format!("wifi.primary.targets.{target}.ssid"));
+        }
+    }
     if !inner.runtime_healthy && !desired.targets.is_empty() {
         drift_fields.push("wifi.primary.runtime".into());
     }
@@ -208,6 +150,8 @@ pub(crate) fn snapshot(inner: &Inner) -> PublicState {
         },
         wifi: WifiPublicState {
             ssid: desired.ssid.clone(),
+            encryption: desired.encryption.clone(),
+            key: desired.key.clone(),
             targets: desired.targets.clone(),
             observed: inner.observed.clone(),
             status: wifi_status,
@@ -224,15 +168,19 @@ pub(crate) fn snapshot(inner: &Inner) -> PublicState {
     }
 }
 
-pub(crate) fn all_equal(
-    observed: &BTreeMap<String, String>,
+pub(crate) fn all_equal_config(
+    observed: &BTreeMap<String, WifiNetworkConfig>,
     targets: &[String],
-    expected: &str,
+    expected: &WifiNetworkConfig,
 ) -> bool {
     !targets.is_empty()
-        && targets
-            .iter()
-            .all(|target| observed.get(target).is_some_and(|ssid| ssid == expected))
+        && targets.iter().all(|target| {
+            observed.get(target).is_some_and(|cfg| {
+                cfg.ssid == expected.ssid
+                    && cfg.encryption == expected.encryption
+                    && cfg.key == expected.key
+            })
+        })
 }
 
 pub(crate) fn validate_ssid(ssid: &str) -> Result<(), DomainError> {
@@ -257,6 +205,38 @@ pub(crate) fn validate_ssid(ssid: &str) -> Result<(), DomainError> {
             ErrorStage::Validate,
             "SSID must not contain NUL",
         ));
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_wifi_config(
+    ssid: &str,
+    encryption: &str,
+    key: Option<&str>,
+) -> Result<(), DomainError> {
+    validate_ssid(ssid)?;
+    if encryption != "none" {
+        let Some(key) = key else {
+            return Err(DomainError::new(
+                ErrorCode::InvalidArgument,
+                ErrorStage::Validate,
+                "key must be provided when encryption is not 'none'",
+            ));
+        };
+        if key.len() < 8 || key.len() > 63 {
+            return Err(DomainError::new(
+                ErrorCode::InvalidArgument,
+                ErrorStage::Validate,
+                "key must be between 8 and 63 characters long",
+            ));
+        }
+        if key.contains('\0') {
+            return Err(DomainError::new(
+                ErrorCode::InvalidArgument,
+                ErrorStage::Validate,
+                "key must not contain NUL",
+            ));
+        }
     }
     Ok(())
 }

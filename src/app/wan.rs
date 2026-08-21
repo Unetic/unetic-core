@@ -2,22 +2,18 @@ use std::{sync::Arc, thread};
 
 use serde_json::json;
 
-use super::{App, state::validate_wifi_config};
+use super::App;
 use crate::{
     errors::{DomainError, ErrorCode, ErrorStage},
-    model::{
-        Lifecycle, OperationAccepted, OperationSource, OperationStatus, SetWifiConfigRequest,
-        WifiNetworkConfig,
-    },
-    transaction::{self, ChangeContext},
+    model::{Lifecycle, OperationAccepted, OperationSource, OperationStatus, SetWanRequest},
+    wan::WanChangeContext,
 };
 
 impl App {
-    pub fn set_wifi_config(
+    pub fn set_wan(
         self: &Arc<Self>,
-        request: SetWifiConfigRequest,
+        request: SetWanRequest,
     ) -> Result<OperationAccepted, DomainError> {
-        validate_wifi_config(&request.ssid, &request.encryption, request.key.as_deref())?;
         if request.request_id.trim().is_empty() || request.request_id.len() > 128 {
             return Err(DomainError::new(
                 ErrorCode::InvalidArgument,
@@ -25,6 +21,8 @@ impl App {
                 "request_id must be between 1 and 128 bytes",
             ));
         }
+
+        crate::wan::validate_wan_desired(&request.wan)?;
 
         let context = {
             let mut inner = self.inner.lock().expect("app state poisoned");
@@ -46,17 +44,6 @@ impl App {
 
             if let Some(active) = &inner.active_operation {
                 if active.request_id.as_deref() == Some(&request.request_id) {
-                    if active.requested_ssid != request.ssid {
-                        return Err(DomainError::new(
-                            ErrorCode::IdempotencyConflict,
-                            ErrorStage::Validate,
-                            "request_id was already used for a different SSID",
-                        )
-                        .details(json!({
-                            "previous_ssid": active.requested_ssid.clone(),
-                            "requested_ssid": request.ssid.clone()
-                        })));
-                    }
                     return Ok(OperationAccepted {
                         operation_id: active.id.clone(),
                         status: active.status,
@@ -73,17 +60,6 @@ impl App {
             if let Some(last) = &inner.last_user_operation
                 && last.request_id.as_deref() == Some(&request.request_id)
             {
-                if last.requested_ssid != request.ssid {
-                    return Err(DomainError::new(
-                        ErrorCode::IdempotencyConflict,
-                        ErrorStage::Validate,
-                        "request_id was already used for a different SSID",
-                    )
-                    .details(json!({
-                        "previous_ssid": last.requested_ssid.clone(),
-                        "requested_ssid": request.ssid.clone()
-                    })));
-                }
                 return Ok(OperationAccepted {
                     operation_id: last.id.clone(),
                     status: last.status,
@@ -103,17 +79,7 @@ impl App {
                 })));
             }
 
-            let normalized_key = if request.encryption == "none" {
-                None
-            } else {
-                request.key.clone()
-            };
-
-            let is_noop = inner.config.wifi.primary.ssid == request.ssid
-                && inner.config.wifi.primary.encryption == request.encryption
-                && inner.config.wifi.primary.key == normalized_key;
-
-            if is_noop {
+            if inner.config.wan == request.wan {
                 return Ok(OperationAccepted {
                     operation_id: self.next_operation_id(),
                     status: OperationStatus::Succeeded,
@@ -121,22 +87,14 @@ impl App {
                 });
             }
 
-            let new_wifi = WifiNetworkConfig {
-                ssid: request.ssid.clone(),
-                encryption: request.encryption.clone(),
-                key: normalized_key,
-                targets: inner.config.wifi.primary.targets.clone(),
-            };
-
-            let context = ChangeContext {
+            let context = WanChangeContext {
                 operation_id: self.next_operation_id(),
                 request_id: Some(request.request_id.clone()),
                 source: OperationSource::User,
                 base_revision: inner.config.revision,
                 target_revision: inner.config.revision + 1,
-                old_wifi: inner.config.wifi.primary.clone(),
-                new_wifi,
-                targets: inner.config.wifi.primary.targets.clone(),
+                old_wan: inner.config.wan.clone(),
+                new_wan: request.wan.clone(),
             };
             inner.active_operation = Some(context.public(OperationStatus::Accepted, None));
             context
@@ -155,10 +113,10 @@ impl App {
         let worker_context = context.clone();
         if let Err(spawn_error) = thread::Builder::new()
             .name(format!(
-                "unetic-wifi-{}",
+                "unetic-wan-{}",
                 &operation_id[..operation_id.len().min(24)]
             ))
-            .spawn(move || transaction::run_change(app, worker_context))
+            .spawn(move || crate::wan::run_wan_change(app, worker_context))
         {
             let error = DomainError::new(
                 ErrorCode::Internal,
@@ -166,7 +124,7 @@ impl App {
                 format!("failed to start transaction worker: {spawn_error}"),
             )
             .with_operation(&context.operation_id, context.request_id.as_deref());
-            self.complete_failure(&context, error.clone(), false);
+            self.complete_wan_failure(&context, error.clone(), false);
             return Err(error);
         }
 
@@ -175,19 +133,5 @@ impl App {
             status: OperationStatus::Accepted,
             noop: false,
         })
-    }
-
-    pub fn wifi_set_config(
-        self: &Arc<Self>,
-        request: SetWifiConfigRequest,
-    ) -> Result<OperationAccepted, DomainError> {
-        self.set_wifi_config(request)
-    }
-
-    pub fn set_ssid(
-        self: &Arc<Self>,
-        request: SetWifiConfigRequest,
-    ) -> Result<OperationAccepted, DomainError> {
-        self.set_wifi_config(request)
     }
 }

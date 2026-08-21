@@ -2,7 +2,9 @@ use std::collections::BTreeMap;
 
 use crate::{
     errors::DomainError,
-    model::{DiscoveredWan, DiscoveredWifi, WanDesired, WanPublicState},
+    model::{
+        DiscoveredWan, DiscoveredWifi, WanDesired, WanPublicState, WifiNetworkConfig,
+    },
 };
 
 pub mod memory;
@@ -13,12 +15,17 @@ pub trait RouterBackend: Send + Sync {
     fn discover_primary_wan(&self) -> Result<DiscoveredWan, DomainError>;
     fn create_session(&self) -> Result<String, DomainError>;
     fn destroy_session(&self, session: &str) -> Result<(), DomainError>;
-    fn read_ssids(
+    fn read_wifi_configs(
         &self,
         targets: &[String],
         session: Option<&str>,
-    ) -> Result<BTreeMap<String, String>, DomainError>;
-    fn stage_ssid(&self, session: &str, targets: &[String], ssid: &str) -> Result<(), DomainError>;
+    ) -> Result<BTreeMap<String, WifiNetworkConfig>, DomainError>;
+    fn stage_wifi_config(
+        &self,
+        session: &str,
+        targets: &[String],
+        config: &WifiNetworkConfig,
+    ) -> Result<(), DomainError>;
     fn read_wan_config(&self, session: Option<&str>) -> Result<WanDesired, DomainError>;
     fn stage_wan_config(&self, session: &str, config: &WanDesired) -> Result<(), DomainError>;
     fn read_wan_runtime_status(&self) -> Result<WanPublicState, DomainError>;
@@ -31,6 +38,18 @@ pub trait RouterBackend: Send + Sync {
     fn read_switch_info(&self) -> Result<crate::switch::SwitchInfo, DomainError>;
     fn read_system_info(&self) -> Result<crate::system::SystemInfo, DomainError>;
     fn read_devices(&self) -> Result<Vec<crate::device::Device>, DomainError>;
+
+    fn read_ssids(
+        &self,
+        targets: &[String],
+        session: Option<&str>,
+    ) -> Result<BTreeMap<String, String>, DomainError> {
+        let configs = self.read_wifi_configs(targets, session)?;
+        Ok(configs
+            .into_iter()
+            .map(|(target, config)| (target, config.ssid))
+            .collect())
+    }
 }
 
 pub struct SessionGuard<'a> {

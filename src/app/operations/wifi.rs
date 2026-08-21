@@ -14,7 +14,7 @@ impl App {
         status: OperationStatus,
         error: Option<DomainError>,
     ) -> Result<(), DomainError> {
-        self.set_operation_status_with_kind(&context.operation_id, "wifi.set_ssid", status, error)
+        self.set_operation_status_with_kind(&context.operation_id, "wifi.set_config", status, error)
     }
 
     pub(crate) fn set_operation_status_with_kind(
@@ -43,7 +43,7 @@ impl App {
             inner.config.clone()
         };
         config.revision = context.target_revision;
-        config.wifi.primary.ssid.clone_from(&context.new_ssid);
+        config.wifi.primary = context.new_wifi.clone();
         self.store.persist_config(&config)?;
         {
             let mut inner = self.inner.lock().expect("app state poisoned");
@@ -63,10 +63,10 @@ impl App {
             id: context.operation_id.clone(),
             request_id: context.request_id.clone(),
             source: context.source,
-            kind: "wifi.set_ssid".into(),
+            kind: "wifi.set_config".into(),
             status: OperationStatus::Succeeded,
             revision,
-            requested_ssid: context.new_ssid.clone(),
+            requested_ssid: context.new_wifi.ssid.clone(),
             error: None,
             finished_at_ms: now_ms(),
         };
@@ -88,7 +88,16 @@ impl App {
             inner.observed = context
                 .targets
                 .iter()
-                .map(|target| (target.clone(), context.new_ssid.clone()))
+                .map(|target| (target.clone(), context.new_wifi.ssid.clone()))
+                .collect();
+            inner.observed_configs = context
+                .targets
+                .iter()
+                .map(|target| {
+                    let mut cfg = context.new_wifi.clone();
+                    cfg.targets = vec![target.clone()];
+                    (target.clone(), cfg)
+                })
                 .collect();
             inner.runtime_healthy = true;
             inner.repair_failures = 0;
@@ -128,14 +137,14 @@ impl App {
             id: context.operation_id.clone(),
             request_id: context.request_id.clone(),
             source: context.source,
-            kind: "wifi.set_ssid".into(),
+            kind: "wifi.set_config".into(),
             status: if rollback_failed {
                 OperationStatus::RollbackFailed
             } else {
                 OperationStatus::Failed
             },
             revision,
-            requested_ssid: context.new_ssid.clone(),
+            requested_ssid: context.new_wifi.ssid.clone(),
             error: Some(error.clone()),
             finished_at_ms: now_ms(),
         };
@@ -197,10 +206,10 @@ impl App {
             id: context.operation_id.clone(),
             request_id: context.request_id.clone(),
             source: context.source,
-            kind: "wifi.set_ssid".into(),
+            kind: "wifi.set_config".into(),
             status: OperationStatus::Failed,
             revision,
-            requested_ssid: context.new_ssid.clone(),
+            requested_ssid: context.new_wifi.ssid.clone(),
             error: Some(uncertain.clone()),
             finished_at_ms: now_ms(),
         };
@@ -244,7 +253,7 @@ impl App {
             id: journal.operation_id.clone(),
             request_id: Some(journal.request_id.clone()),
             source: OperationSource::User,
-            kind: "wifi.set_ssid".into(),
+            kind: "wifi.set_config".into(),
             status,
             revision,
             requested_ssid: journal.new_ssid.clone(),

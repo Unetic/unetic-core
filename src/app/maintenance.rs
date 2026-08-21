@@ -76,7 +76,7 @@ fn run_maintenance_exit(app: Arc<App>) {
         let inner = app.inner.lock().expect("app state poisoned");
         (
             inner.config.wifi.primary.targets.clone(),
-            inner.config.wifi.primary.ssid.clone(),
+            inner.config.wifi.primary.clone(),
             inner.config.revision,
         )
     };

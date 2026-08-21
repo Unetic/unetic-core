@@ -6,7 +6,9 @@ use super::{devices, rpc, switch, wan, wireless};
 use crate::{
     backend::RouterBackend,
     errors::{DomainError, ErrorCode, ErrorStage},
-    model::{DiscoveredWan, DiscoveredWifi, WanDesired, WanPublicState},
+    model::{
+        DiscoveredWan, DiscoveredWifi, WanDesired, WanPublicState, WifiNetworkConfig,
+    },
 };
 
 pub struct OpenWrtBackend;
@@ -30,16 +32,21 @@ impl RouterBackend for OpenWrtBackend {
         crate::openwrt::rpc::destroy_rpcd_session(session)
     }
 
-    fn read_ssids(
+    fn read_wifi_configs(
         &self,
         targets: &[String],
         session: Option<&str>,
-    ) -> Result<BTreeMap<String, String>, DomainError> {
-        wireless::read_ssids(targets, session)
+    ) -> Result<BTreeMap<String, WifiNetworkConfig>, DomainError> {
+        wireless::read_wifi_configs(targets, session)
     }
 
-    fn stage_ssid(&self, session: &str, targets: &[String], ssid: &str) -> Result<(), DomainError> {
-        wireless::stage_ssid(session, targets, ssid)
+    fn stage_wifi_config(
+        &self,
+        session: &str,
+        targets: &[String],
+        config: &WifiNetworkConfig,
+    ) -> Result<(), DomainError> {
+        wireless::stage_wifi_config(session, targets, config)
     }
 
     fn discover_primary_wan(&self) -> Result<DiscoveredWan, DomainError> {

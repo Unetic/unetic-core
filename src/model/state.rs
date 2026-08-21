@@ -37,9 +37,17 @@ pub struct WanPublicState {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct WifiPublicState {
     pub ssid: String,
+    #[serde(default = "default_wifi_encryption")]
+    pub encryption: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key: Option<String>,
     pub targets: Vec<String>,
     pub observed: BTreeMap<String, String>,
     pub status: WifiStatus,
+}
+
+fn default_wifi_encryption() -> String {
+    "none".into()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

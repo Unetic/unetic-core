@@ -6,7 +6,7 @@ use serde_json::{Value, json};
 use crate::{
     app::App,
     errors::{DomainError, ErrorCode, ErrorStage},
-    model::{API_VERSION, SetSsidRequest},
+    model::{API_VERSION, SetWifiConfigRequest},
 };
 
 #[derive(Serialize)]
@@ -45,15 +45,15 @@ pub fn dispatch(app: &Arc<App>, method: &str, request_json: &str) -> String {
         "operation.get" => Ok(app.last_or_active_operation()),
         "maintenance.get" => Ok(json!(app.maintenance_get())),
         "health.get" => Ok(json!(app.health())),
-        "wifi.set_ssid" => serde_json::from_value::<SetSsidRequest>(request)
+        "wifi.set_config" => serde_json::from_value::<SetWifiConfigRequest>(request)
             .map_err(|error| {
                 DomainError::new(
                     ErrorCode::InvalidArgument,
                     ErrorStage::Validate,
-                    format!("invalid wifi.set_ssid request: {error}"),
+                    format!("invalid wifi.set_config request: {error}"),
                 )
             })
-            .and_then(|request| app.set_ssid(request).map(|result| json!(result))),
+            .and_then(|request| app.wifi_set_config(request).map(|result| json!(result))),
         "wan.set" | "wan.set_config" => {
             serde_json::from_value::<crate::model::SetWanRequest>(request)
                 .map_err(|error| {

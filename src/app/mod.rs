@@ -26,7 +26,9 @@ mod handlers;
 mod maintenance;
 mod operations;
 mod reconcile;
+mod recovery;
 mod state;
+mod wan;
 
 use self::state::{generate_id, snapshot};
 
@@ -58,6 +60,7 @@ pub(crate) struct Inner {
     pub maintenance_exiting: bool,
     pub maintenance_reason: Option<String>,
     pub observed: BTreeMap<String, String>,
+    pub observed_configs: BTreeMap<String, crate::model::WifiNetworkConfig>,
     pub runtime_healthy: bool,
     pub wan: crate::model::WanPublicState,
     pub active_operation: Option<PublicOperation>,
@@ -115,7 +118,7 @@ impl App {
                     let wan = backend
                         .discover_primary_wan()
                         .map_or_else(|_| crate::model::WanDesired::default(), |w| w.to_desired());
-                    let config = DesiredConfig::new(discovered.ssid, discovered.targets, wan);
+                    let config = DesiredConfig::new(discovered.to_network_config(), wan);
                     if let Err(error) = store.persist_config(&config) {
                         warn!(%error, "failed to persist discovered default config");
                         startup_error = Some(error);
@@ -149,6 +152,7 @@ impl App {
                 maintenance_exiting: false,
                 maintenance_reason: None,
                 observed: BTreeMap::new(),
+                observed_configs: BTreeMap::new(),
                 runtime_healthy: false,
                 wan: wan_status,
                 active_operation,

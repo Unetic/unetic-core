@@ -6,7 +6,8 @@ use crate::{
     app::App,
     errors::{DomainError, ErrorCode, ErrorStage},
     model::{
-        OperationSource, OperationStatus, PublicOperation, STATE_SCHEMA_VERSION, TransactionJournal,
+        OperationSource, OperationStatus, PublicOperation, STATE_SCHEMA_VERSION,
+        TransactionJournal, WifiNetworkConfig,
     },
 };
 
@@ -17,8 +18,8 @@ pub struct ChangeContext {
     pub source: OperationSource,
     pub base_revision: u64,
     pub target_revision: u64,
-    pub old_ssid: String,
-    pub new_ssid: String,
+    pub old_wifi: WifiNetworkConfig,
+    pub new_wifi: WifiNetworkConfig,
     pub targets: Vec<String>,
 }
 
@@ -29,9 +30,9 @@ impl ChangeContext {
             id: self.operation_id.clone(),
             request_id: self.request_id.clone(),
             source: self.source,
-            kind: "wifi.set_ssid".into(),
+            kind: "wifi.set_config".into(),
             status,
-            requested_ssid: self.new_ssid.clone(),
+            requested_ssid: self.new_wifi.ssid.clone(),
             error,
         }
     }
@@ -45,8 +46,12 @@ impl ChangeContext {
             source: self.source,
             base_revision: self.base_revision,
             target_revision: self.target_revision,
-            old_ssid: self.old_ssid.clone(),
-            new_ssid: self.new_ssid.clone(),
+            old_ssid: self.old_wifi.ssid.clone(),
+            new_ssid: self.new_wifi.ssid.clone(),
+            old_encryption: self.old_wifi.encryption.clone(),
+            new_encryption: self.new_wifi.encryption.clone(),
+            old_key: self.old_wifi.key.clone(),
+            new_key: self.new_wifi.key.clone(),
             targets: self.targets.clone(),
             phase,
         }
@@ -59,8 +64,8 @@ pub fn run_change(app: Arc<App>, context: ChangeContext) {
         operation_id = %context.operation_id,
         request_id = ?context.request_id,
         source = ?context.source,
-        old_ssid = %context.old_ssid,
-        new_ssid = %context.new_ssid,
+        old_ssid = %context.old_wifi.ssid,
+        new_ssid = %context.new_wifi.ssid,
     );
     let _entered = span.enter();
 
@@ -78,14 +83,14 @@ fn execute(app: &Arc<App>, context: &ChangeContext) -> Result<(), DomainError> {
     app.set_operation_status(context, OperationStatus::Staging, None)?;
     if let Err(error) = app
         .backend
-        .stage_ssid(&session.id, &context.targets, &context.new_ssid)
+        .stage_wifi_config(&session.id, &context.targets, &context.new_wifi)
     {
         let _ = app.backend.revert_staged(&session.id);
         app.complete_failure(context, attach(error, context), false);
         return Ok(());
     }
 
-    let staged = match app.backend.read_ssids(&context.targets, Some(&session.id)) {
+    let staged = match app.backend.read_wifi_configs(&context.targets, Some(&session.id)) {
         Ok(staged) => staged,
         Err(error) => {
             let _ = app.backend.revert_staged(&session.id);
@@ -94,18 +99,20 @@ fn execute(app: &Arc<App>, context: &ChangeContext) -> Result<(), DomainError> {
         }
     };
 
-    if context
-        .targets
-        .iter()
-        .any(|target| staged.get(target) != Some(&context.new_ssid))
-    {
+    if context.targets.iter().any(|target| {
+        staged.get(target).is_none_or(|cfg| {
+            cfg.ssid != context.new_wifi.ssid
+                || cfg.encryption != context.new_wifi.encryption
+                || cfg.key != context.new_wifi.key
+        })
+    }) {
         let _ = app.backend.revert_staged(&session.id);
         app.complete_failure(
             context,
             DomainError::new(
                 ErrorCode::UciStageMismatch,
                 ErrorStage::Stage,
-                "staged UCI values do not match requested SSID",
+                "staged UCI values do not match requested Wi-Fi configuration",
             )
             .with_operation(&context.operation_id, context.request_id.as_deref()),
             false,
@@ -128,7 +135,7 @@ fn execute(app: &Arc<App>, context: &ChangeContext) -> Result<(), DomainError> {
     if let Err(error) = verify(
         app,
         &context.targets,
-        &context.new_ssid,
+        &context.new_wifi,
         app.timing.verify_timeout,
     ) {
         rollback_to_old(app, context, &session.id, error);
@@ -191,7 +198,7 @@ fn rollback_to_old(
     let rollback_result = verify(
         app,
         &context.targets,
-        &context.old_ssid,
+        &context.old_wifi,
         app.timing.rollback_verify_timeout,
     );
     if let Err(error) = rollback_result {

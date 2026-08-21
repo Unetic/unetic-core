@@ -105,10 +105,29 @@ pub struct WanDesired {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct WifiNetworkConfig {
     pub ssid: String,
+    #[serde(default = "default_wifi_encryption")]
+    pub encryption: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key: Option<String>,
     pub targets: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+fn default_wifi_encryption() -> String {
+    "none".into()
+}
+
+impl Default for WifiNetworkConfig {
+    fn default() -> Self {
+        Self {
+            ssid: String::new(),
+            encryption: "none".into(),
+            key: None,
+            targets: Vec::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct WifiDesired {
     pub primary: WifiNetworkConfig,
 }
@@ -124,13 +143,11 @@ pub struct DesiredConfig {
 
 impl DesiredConfig {
     #[must_use]
-    pub fn new(ssid: String, targets: Vec<String>, wan: WanDesired) -> Self {
+    pub fn new(primary: WifiNetworkConfig, wan: WanDesired) -> Self {
         Self {
             schema_version: STATE_SCHEMA_VERSION,
             revision: 1,
-            wifi: WifiDesired {
-                primary: WifiNetworkConfig { ssid, targets },
-            },
+            wifi: WifiDesired { primary },
             wan,
         }
     }
@@ -140,12 +157,7 @@ impl DesiredConfig {
         Self {
             schema_version: STATE_SCHEMA_VERSION,
             revision: 0,
-            wifi: WifiDesired {
-                primary: WifiNetworkConfig {
-                    ssid: String::new(),
-                    targets: Vec::new(),
-                },
-            },
+            wifi: WifiDesired::default(),
             wan: WanDesired::default(),
         }
     }
@@ -164,16 +176,30 @@ pub struct TransactionJournal {
     pub target_revision: u64,
     pub old_ssid: String,
     pub new_ssid: String,
+    #[serde(default = "default_wifi_encryption")]
+    pub old_encryption: String,
+    #[serde(default = "default_wifi_encryption")]
+    pub new_encryption: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub old_key: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub new_key: Option<String>,
     pub targets: Vec<String>,
     pub phase: OperationStatus,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct SetSsidRequest {
+pub struct SetWifiConfigRequest {
     pub ssid: String,
+    #[serde(default = "default_wifi_encryption")]
+    pub encryption: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key: Option<String>,
     pub expected_revision: u64,
     pub request_id: String,
 }
+
+pub type SetSsidRequest = SetWifiConfigRequest;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SetWanRequest {
@@ -192,7 +218,32 @@ pub struct OperationAccepted {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DiscoveredWifi {
     pub ssid: String,
+    pub encryption: String,
+    pub key: Option<String>,
     pub targets: Vec<String>,
+}
+
+impl Default for DiscoveredWifi {
+    fn default() -> Self {
+        Self {
+            ssid: String::new(),
+            encryption: "none".into(),
+            key: None,
+            targets: Vec::new(),
+        }
+    }
+}
+
+impl DiscoveredWifi {
+    #[must_use]
+    pub fn to_network_config(&self) -> WifiNetworkConfig {
+        WifiNetworkConfig {
+            ssid: self.ssid.clone(),
+            encryption: self.encryption.clone(),
+            key: self.key.clone(),
+            targets: self.targets.clone(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]

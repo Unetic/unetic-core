@@ -3,13 +3,10 @@ use std::{
     sync::Mutex,
 };
 
-use crate::{
-    backend::RouterBackend,
-    errors::{DomainError, ErrorCode, ErrorStage},
-    model::{DiscoveredWan, DiscoveredWifi, WanDesired, WanProtocol, WanPublicState, WanStatus},
-};
+use crate::model::{WanDesired, WanPublicState, WanStatus, WifiNetworkConfig};
 
 mod mock;
+mod router;
 mod wan;
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -24,11 +21,11 @@ pub struct FailurePlan {
 
 #[derive(Debug)]
 pub(crate) struct MemoryState {
-    pub(crate) committed: BTreeMap<String, String>,
+    pub(crate) committed: BTreeMap<String, WifiNetworkConfig>,
     pub(crate) wan_committed: WanDesired,
-    pub(crate) sessions: HashMap<String, BTreeMap<String, String>>,
+    pub(crate) sessions: HashMap<String, BTreeMap<String, WifiNetworkConfig>>,
     pub(crate) wan_sessions: HashMap<String, WanDesired>,
-    pub(crate) rollback_snapshots: HashMap<String, BTreeMap<String, String>>,
+    pub(crate) rollback_snapshots: HashMap<String, BTreeMap<String, WifiNetworkConfig>>,
     pub(crate) wan_rollback_snapshots: HashMap<String, WanDesired>,
     pub(crate) wan_runtime: WanPublicState,
     pub(crate) next_session: u64,
@@ -43,27 +40,29 @@ pub struct MemoryBackend {
 impl MemoryBackend {
     #[must_use]
     pub fn new(ssid: &str, targets: &[&str]) -> Self {
-        Self::with_wan(
-            ssid,
-            targets,
-            WanDesired {
-                present: true,
-                proto: WanProtocol::Dhcp,
-                device: Some("eth1".into()),
-                custom_mac: None,
-                custom_mtu: None,
-                custom_dns: Vec::new(),
-                static_config: None,
-                pppoe_config: None,
-            },
-        )
+        Self::with_wan(ssid, targets, WanDesired::default())
     }
 
     #[must_use]
     pub fn with_wan(ssid: &str, targets: &[&str], wan: WanDesired) -> Self {
+        let wifi = WifiNetworkConfig {
+            ssid: ssid.to_owned(),
+            encryption: "none".into(),
+            key: None,
+            targets: targets.iter().map(|s| (*s).to_owned()).collect(),
+        };
+        Self::with_wifi_and_wan(wifi, targets, wan)
+    }
+
+    #[must_use]
+    pub fn with_wifi_and_wan(wifi: WifiNetworkConfig, targets: &[&str], wan: WanDesired) -> Self {
         let committed = targets
             .iter()
-            .map(|target| ((*target).to_owned(), ssid.to_owned()))
+            .map(|target| {
+                let mut cfg = wifi.clone();
+                cfg.targets = vec![(*target).to_owned()];
+                ((*target).to_owned(), cfg)
+            })
             .collect();
         let wan_runtime = WanPublicState {
             present: wan.present,
@@ -118,7 +117,7 @@ impl MemoryBackend {
     }
 
     #[must_use]
-    pub fn committed_ssids(&self) -> BTreeMap<String, String> {
+    pub fn committed_configs(&self) -> BTreeMap<String, WifiNetworkConfig> {
         self.state
             .lock()
             .expect("memory backend poisoned")
@@ -126,237 +125,34 @@ impl MemoryBackend {
             .clone()
     }
 
-    pub fn external_set(&self, target: &str, ssid: &str) {
+    #[must_use]
+    pub fn committed_ssids(&self) -> BTreeMap<String, String> {
         self.state
             .lock()
             .expect("memory backend poisoned")
             .committed
-            .insert(target.to_owned(), ssid.to_owned());
-    }
-}
-
-impl RouterBackend for MemoryBackend {
-    fn discover_primary_wifi(&self) -> Result<DiscoveredWifi, DomainError> {
-        let state = self.state.lock().expect("memory backend poisoned");
-        let mut ssids = state.committed.values();
-        let Some(first) = ssids.next() else {
-            return Err(DomainError::new(
-                ErrorCode::AmbiguousWifiConfig,
-                ErrorStage::Bootstrap,
-                "no AP targets found",
-            ));
-        };
-        if ssids.any(|ssid| ssid != first) {
-            return Err(DomainError::new(
-                ErrorCode::AmbiguousWifiConfig,
-                ErrorStage::Bootstrap,
-                "managed APs do not share one SSID",
-            ));
-        }
-        Ok(DiscoveredWifi {
-            ssid: first.clone(),
-            targets: state.committed.keys().cloned().collect(),
-        })
-    }
-
-    fn discover_primary_wan(&self) -> Result<DiscoveredWan, DomainError> {
-        self.mem_discover_primary_wan()
-    }
-
-    fn create_session(&self) -> Result<String, DomainError> {
-        let mut state = self.state.lock().expect("memory backend poisoned");
-        let sid = format!("memory-session-{}", state.next_session);
-        state.next_session += 1;
-        let committed = state.committed.clone();
-        state.sessions.insert(sid.clone(), committed);
-        let wan_committed = state.wan_committed.clone();
-        state.wan_sessions.insert(sid.clone(), wan_committed);
-        Ok(sid)
-    }
-
-    fn destroy_session(&self, session: &str) -> Result<(), DomainError> {
-        let mut state = self.state.lock().expect("memory backend poisoned");
-        state.sessions.remove(session);
-        state.wan_sessions.remove(session);
-        state.rollback_snapshots.remove(session);
-        state.wan_rollback_snapshots.remove(session);
-        Ok(())
-    }
-
-    fn read_ssids(
-        &self,
-        targets: &[String],
-        session: Option<&str>,
-    ) -> Result<BTreeMap<String, String>, DomainError> {
-        let state = self.state.lock().expect("memory backend poisoned");
-        let source = session
-            .and_then(|sid| state.sessions.get(sid))
-            .unwrap_or(&state.committed);
-        targets
             .iter()
-            .map(|target| {
-                source.get(target).cloned().map_or_else(
-                    || {
-                        Err(DomainError::new(
-                            ErrorCode::TargetMissing,
-                            ErrorStage::Verify,
-                            format!("missing target {target}"),
-                        ))
-                    },
-                    |ssid| Ok((target.clone(), ssid)),
-                )
-            })
+            .map(|(k, v)| (k.clone(), v.ssid.clone()))
             .collect()
     }
 
-    fn stage_ssid(&self, session: &str, targets: &[String], ssid: &str) -> Result<(), DomainError> {
-        let mut state = self.state.lock().expect("memory backend poisoned");
-        if state.failure.fail_stage {
-            return Err(DomainError::new(
-                ErrorCode::UciStageFailed,
-                ErrorStage::Stage,
-                "injected stage failure",
-            ));
-        }
-        let staged = state.sessions.get_mut(session).ok_or_else(|| {
-            DomainError::new(
-                ErrorCode::RpcdSessionLost,
-                ErrorStage::Stage,
-                "session not found",
-            )
-        })?;
-        for target in targets {
-            if !staged.contains_key(target) {
-                return Err(DomainError::new(
-                    ErrorCode::TargetMissing,
-                    ErrorStage::Stage,
-                    format!("missing target {target}"),
-                ));
-            }
-            staged.insert(target.clone(), ssid.to_owned());
-        }
-        Ok(())
-    }
-
-    fn read_wan_config(&self, session: Option<&str>) -> Result<WanDesired, DomainError> {
-        self.mem_read_wan_config(session)
-    }
-
-    fn stage_wan_config(&self, session: &str, config: &WanDesired) -> Result<(), DomainError> {
-        self.mem_stage_wan_config(session, config)
-    }
-
-    fn read_wan_runtime_status(&self) -> Result<WanPublicState, DomainError> {
-        self.mem_read_wan_runtime_status()
-    }
-
-    fn revert_staged(&self, session: &str) -> Result<(), DomainError> {
-        let mut state = self.state.lock().expect("memory backend poisoned");
-        let committed = state.committed.clone();
-        state.sessions.insert(session.to_owned(), committed);
-        let wan_committed = state.wan_committed.clone();
-        state.wan_sessions.insert(session.to_owned(), wan_committed);
-        Ok(())
-    }
-
-    fn apply(&self, session: &str, _rollback_timeout_secs: u32) -> Result<(), DomainError> {
-        let mut state = self.state.lock().expect("memory backend poisoned");
-        if state.failure.fail_apply {
-            return Err(DomainError::new(
-                ErrorCode::UciApplyFailed,
-                ErrorStage::Apply,
-                "injected apply failure",
-            ));
-        }
-        let staged = state.sessions.get(session).cloned().ok_or_else(|| {
-            DomainError::new(
-                ErrorCode::RpcdSessionLost,
-                ErrorStage::Apply,
-                "session not found",
-            )
-        })?;
-        let snapshot = state.committed.clone();
-        state
-            .rollback_snapshots
-            .insert(session.to_owned(), snapshot);
-        state.committed = staged;
-
-        let wan_staged = state
-            .wan_sessions
-            .get(session)
-            .cloned()
-            .unwrap_or_else(|| state.wan_committed.clone());
-        let wan_snapshot = state.wan_committed.clone();
-        state
-            .wan_rollback_snapshots
-            .insert(session.to_owned(), wan_snapshot);
-        state.wan_committed = wan_staged;
-        Ok(())
-    }
-
-    fn confirm(&self, session: &str) -> Result<(), DomainError> {
-        let mut state = self.state.lock().expect("memory backend poisoned");
-        if state.failure.fail_confirm {
-            return Err(DomainError::new(
-                ErrorCode::ConfirmFailed,
-                ErrorStage::Confirm,
-                "injected confirm failure",
-            ));
-        }
-        state.rollback_snapshots.remove(session);
-        state.wan_rollback_snapshots.remove(session);
-        Ok(())
-    }
-
-    fn rollback(&self, session: &str) -> Result<(), DomainError> {
-        let mut state = self.state.lock().expect("memory backend poisoned");
-        if state.failure.fail_rollback {
-            return Err(DomainError::new(
-                ErrorCode::RollbackFailed,
-                ErrorStage::Rollback,
-                "injected rollback failure",
-            ));
-        }
-        if let Some(snapshot) = state.rollback_snapshots.remove(session) {
-            state.committed = snapshot.clone();
-            state.sessions.insert(session.to_owned(), snapshot);
-        }
-        if let Some(wan_snapshot) = state.wan_rollback_snapshots.remove(session) {
-            state.wan_committed = wan_snapshot.clone();
-            state.wan_sessions.insert(session.to_owned(), wan_snapshot);
-        }
-        Ok(())
-    }
-
-    fn runtime_healthy(&self, _targets: &[String], _ssid: &str) -> Result<bool, DomainError> {
-        let state = self.state.lock().expect("memory backend poisoned");
-        if state.failure.runtime_unhealthy {
-            return Ok(false);
-        }
-        if state.failure.fail_candidate_verify && !state.rollback_snapshots.is_empty() {
-            return Ok(false);
-        }
-        Ok(true)
-    }
-
-    fn reload_wireless_runtime(&self) -> Result<(), DomainError> {
+    pub fn external_set(&self, target: &str, config: WifiNetworkConfig) {
         self.state
             .lock()
             .expect("memory backend poisoned")
-            .failure
-            .runtime_unhealthy = false;
-        Ok(())
+            .committed
+            .insert(target.to_owned(), config);
     }
 
-    fn read_switch_info(&self) -> Result<crate::switch::SwitchInfo, DomainError> {
-        Ok(mock::mock_switch_info())
-    }
-
-    fn read_system_info(&self) -> Result<crate::system::SystemInfo, DomainError> {
-        Ok(mock::mock_system_info())
-    }
-
-    fn read_devices(&self) -> Result<Vec<crate::device::Device>, DomainError> {
-        Ok(mock::mock_devices())
+    pub fn external_set_ssid(&self, target: &str, ssid: &str) {
+        let mut state = self.state.lock().expect("memory backend poisoned");
+        let prev = state.committed.get(target).cloned().unwrap_or_default();
+        state.committed.insert(
+            target.to_owned(),
+            WifiNetworkConfig {
+                ssid: ssid.to_owned(),
+                ..prev
+            },
+        );
     }
 }

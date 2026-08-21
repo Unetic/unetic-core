@@ -47,6 +47,10 @@ impl WanChangeContext {
             target_revision: self.target_revision,
             old_ssid: String::new(),
             new_ssid: String::new(),
+            old_encryption: "none".into(),
+            new_encryption: "none".into(),
+            old_key: None,
+            new_key: None,
             targets: Vec::new(),
             phase,
         }
