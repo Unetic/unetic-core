@@ -84,7 +84,8 @@ pub fn destroy_rpcd_session(session: &str) -> Result<(), DomainError> {
         json!({
             "ubus_rpc_session": session
         }),
-    ).map(|_| ())
+    )
+    .map(|_| ())
 }
 
 pub fn uci_get_config(

@@ -72,6 +72,15 @@ pub fn dispatch(app: &Arc<App>, method: &str, request_json: &str) -> String {
             app.maintenance_enter(reason).map(|state| json!(state))
         }
         "maintenance.exit" => app.maintenance_exit().map(|state| json!(state)),
+        "tools.ping" => serde_json::from_value::<crate::tools::PingRequest>(request)
+            .map_err(|error| {
+                DomainError::new(
+                    ErrorCode::InvalidArgument,
+                    ErrorStage::Validate,
+                    format!("invalid tools.ping request: {error}"),
+                )
+            })
+            .and_then(|request| app.ping(&request.host).map(|result| json!(result))),
         _ => Err(DomainError::new(
             ErrorCode::InvalidArgument,
             ErrorStage::Validate,

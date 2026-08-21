@@ -8,7 +8,6 @@ use crate::{
 };
 
 impl App {
-
     pub(crate) fn set_operation_status(
         &self,
         context: &ChangeContext,
@@ -228,5 +227,33 @@ impl App {
             inner.last_system_error = Some(error);
         }
         self.publish();
+    }
+
+    pub(crate) fn record_recovered_operation(
+        &self,
+        journal: &crate::model::TransactionJournal,
+        status: OperationStatus,
+        revision: u64,
+        error: Option<DomainError>,
+    ) {
+        if journal.source != OperationSource::User {
+            return;
+        }
+
+        let last = LastOperation {
+            id: journal.operation_id.clone(),
+            request_id: Some(journal.request_id.clone()),
+            source: OperationSource::User,
+            kind: "wifi.set_ssid".into(),
+            status,
+            revision,
+            requested_ssid: journal.new_ssid.clone(),
+            error,
+            finished_at_ms: now_ms(),
+        };
+        self.inner
+            .lock()
+            .expect("app state poisoned")
+            .last_user_operation = Some(last);
     }
 }

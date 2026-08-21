@@ -6,15 +6,92 @@ use std::{
 };
 
 use serde_json::json;
-use tracing::warn;
+use tracing::{info, warn};
 
 use super::{App, Inner};
 use crate::{
     errors::{DomainError, ErrorCode, ErrorStage},
-    model::{API_VERSION, DriftState, MaintenanceState, PublicState, WifiPublicState, WifiStatus},
+    model::{
+        API_VERSION, DriftState, MaintenanceState, OperationSource, OperationStatus, PublicState,
+        TransactionJournal, WifiPublicState, WifiStatus,
+    },
+    transaction,
 };
 
 impl App {
+    pub(crate) fn recover_from_journal(
+        &self,
+        journal: &TransactionJournal,
+    ) -> Result<(), DomainError> {
+        let config = self
+            .inner
+            .lock()
+            .expect("app state poisoned")
+            .config
+            .clone();
+
+        if config.revision == journal.base_revision && config.wifi.primary.ssid == journal.old_ssid
+        {
+            info!(
+                operation_id = %journal.operation_id,
+                "recovering interrupted transaction to old desired state"
+            );
+            transaction::force_state_sync(
+                self,
+                &journal.targets,
+                &journal.old_ssid,
+                OperationSource::Recovery,
+            )?;
+            self.record_recovered_operation(
+                journal,
+                OperationStatus::Failed,
+                journal.base_revision,
+                Some(
+                    DomainError::new(
+                        ErrorCode::OperationInterrupted,
+                        ErrorStage::Bootstrap,
+                        "operation was interrupted by a core restart and rolled back",
+                    )
+                    .with_operation(&journal.operation_id, Some(&journal.request_id)),
+                ),
+            );
+            self.store.clear_transaction()?;
+            self.refresh_observed();
+            return Ok(());
+        }
+
+        if config.revision == journal.target_revision
+            && config.wifi.primary.ssid == journal.new_ssid
+        {
+            info!(
+                operation_id = %journal.operation_id,
+                "confirming committed desired state after restart"
+            );
+            transaction::force_state_sync(
+                self,
+                &journal.targets,
+                &journal.new_ssid,
+                OperationSource::Recovery,
+            )?;
+            self.record_recovered_operation(
+                journal,
+                OperationStatus::Succeeded,
+                journal.target_revision,
+                None,
+            );
+            self.store.clear_transaction()?;
+            self.refresh_observed();
+            return Ok(());
+        }
+
+        warn!(
+            operation_id = %journal.operation_id,
+            "transaction journal does not match durable desired state; clearing journal"
+        );
+        self.store.clear_transaction()?;
+        self.refresh_observed();
+        Ok(())
+    }
     pub(crate) fn publish(&self) -> PublicState {
         let state = {
             let mut inner = self.inner.lock().expect("app state poisoned");

@@ -28,7 +28,7 @@ impl App {
         }
 
         let context = {
-            let inner = self.inner.lock().expect("app state poisoned");
+            let mut inner = self.inner.lock().expect("app state poisoned");
 
             if inner.maintenance {
                 return Err(DomainError::new(
@@ -176,7 +176,7 @@ impl App {
         crate::wan::validate_wan_desired(&request.wan)?;
 
         let context = {
-            let inner = self.inner.lock().expect("app state poisoned");
+            let mut inner = self.inner.lock().expect("app state poisoned");
 
             if inner.maintenance {
                 return Err(DomainError::new(

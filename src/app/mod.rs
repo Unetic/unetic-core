@@ -9,18 +9,17 @@ use std::{
 };
 
 use serde_json::json;
-use tracing::{error, info, warn};
+use tracing::{error, warn};
 
 use crate::{
     backend::RouterBackend,
     errors::{DomainError, ErrorCode, ErrorStage},
     model::{
-        DesiredConfig, HealthState, LastOperation, Lifecycle, OperationSource, PublicOperation,
-        PublicState, TransactionJournal, WifiPublicState,
+        DesiredConfig, HealthState, LastOperation, Lifecycle, PublicOperation, PublicState,
+        WifiPublicState,
     },
     storage::StateStore,
     switch::SwitchInfo,
-    transaction,
 };
 
 mod handlers;
@@ -198,32 +197,6 @@ impl App {
         self.publish();
     }
 
-    fn recover_from_journal(&self, journal: &TransactionJournal) -> Result<(), DomainError> {
-        let config = self
-            .inner
-            .lock()
-            .expect("app state poisoned")
-            .config
-            .clone();
-
-        if config.revision == journal.base_revision && config.wifi.primary.ssid == journal.old_ssid
-        {
-            info!(
-                operation_id = %journal.operation_id,
-                "recovering interrupted transaction to old desired state"
-            );
-            transaction::force_state_sync(
-                self,
-                &journal.targets,
-                &journal.old_ssid,
-                OperationSource::Recovery,
-            )?;
-        }
-        self.store.clear_transaction()?;
-        self.refresh_observed();
-        Ok(())
-    }
-
     pub fn shutdown(&self) {
         self.shutdown.store(true, Ordering::Relaxed);
     }
@@ -256,8 +229,6 @@ impl App {
     }
 
     pub fn system_info(&self) -> crate::system::SystemInfo {
-        self.backend
-            .read_system_info()
-            .unwrap_or_default()
+        self.backend.read_system_info().unwrap_or_default()
     }
 }

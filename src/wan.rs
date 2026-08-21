@@ -6,8 +6,8 @@ use crate::{
     app::App,
     errors::{DomainError, ErrorCode, ErrorStage},
     model::{
-        OperationSource, OperationStatus, PublicOperation, STATE_SCHEMA_VERSION, SetWanRequest,
-        TransactionJournal, WanDesired, WanProtocol, WanStatus,
+        OperationSource, OperationStatus, PublicOperation, STATE_SCHEMA_VERSION,
+        TransactionJournal, WanDesired, WanStatus,
     },
 };
 
@@ -198,4 +198,3 @@ pub fn force_wan_state_sync(
 
 pub mod validation;
 pub use validation::*;
-

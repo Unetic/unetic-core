@@ -74,7 +74,6 @@ fn parse_meminfo_field(field: &str) -> u64 {
             continue;
         };
         return rest
-            .trim()
             .split_whitespace()
             .next()
             .and_then(|s| s.parse().ok())

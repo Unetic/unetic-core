@@ -11,6 +11,7 @@ use crate::{
     errors::{DomainError, ErrorCode, ErrorStage},
     model::{Lifecycle, OperationSource, OperationStatus},
     transaction::{self, ChangeContext},
+    wan::WanChangeContext,
 };
 
 impl App {
@@ -49,7 +50,7 @@ impl App {
 
         enum Repair {
             Config(ChangeContext),
-            WanConfig(crate::transaction::WanChangeContext),
+            WanConfig(Box<WanChangeContext>),
             Runtime { targets: Vec<String>, ssid: String },
             None { publish: bool },
         }
@@ -61,7 +62,9 @@ impl App {
                 &inner.config.wifi.primary.targets,
                 &inner.config.wifi.primary.ssid,
             );
-            let wan_drift = observed_wan.as_ref().is_some_and(|w| w != &inner.config.wan);
+            let wan_drift = observed_wan
+                .as_ref()
+                .is_some_and(|w| w != &inner.config.wan);
             let runtime_drift = !inner.runtime_healthy;
 
             let should_skip = inner.maintenance
@@ -107,7 +110,7 @@ impl App {
                 inner.active_operation = Some(context.public(OperationStatus::Accepted, None));
                 Repair::Config(context)
             } else if wan_drift {
-                let context = crate::transaction::WanChangeContext {
+                let context = WanChangeContext {
                     operation_id: self.next_operation_id(),
                     request_id: None,
                     source: OperationSource::Reconcile,
@@ -117,7 +120,7 @@ impl App {
                     new_wan: inner.config.wan.clone(),
                 };
                 inner.active_operation = Some(context.public(OperationStatus::Accepted, None));
-                Repair::WanConfig(context)
+                Repair::WanConfig(Box::new(context))
             } else {
                 let context = ChangeContext {
                     operation_id: self.next_operation_id(),
@@ -169,7 +172,7 @@ impl App {
                 let app = Arc::clone(self);
                 if thread::Builder::new()
                     .name("unetic-reconcile-wan".into())
-                    .spawn(move || crate::wan::execute_wan(&app, &context))
+                    .spawn(move || crate::wan::run_wan_change(app, *context))
                     .is_err()
                 {
                     let mut inner = self.inner.lock().expect("app state poisoned");

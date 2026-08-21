@@ -15,6 +15,8 @@ pub mod model;
 pub mod openwrt;
 pub mod storage;
 pub mod switch;
+pub mod system;
+pub mod tools;
 pub mod transaction;
 pub mod wan;
 
@@ -25,3 +27,4 @@ pub use switch::{
     SwitchArchitecture, SwitchFeatureStatus, SwitchFeatures, SwitchInfo, SwitchSocInfo,
 };
 pub use system::SystemInfo;
+pub use tools::{PingRequest, PingResult};
