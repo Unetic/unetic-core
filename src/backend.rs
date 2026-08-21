@@ -30,6 +30,7 @@ pub trait RouterBackend: Send + Sync {
     fn reload_wireless_runtime(&self) -> Result<(), DomainError>;
     fn read_switch_info(&self) -> Result<crate::switch::SwitchInfo, DomainError>;
     fn read_system_info(&self) -> Result<crate::system::SystemInfo, DomainError>;
+    fn read_devices(&self) -> Result<Vec<crate::device::Device>, DomainError>;
 }
 
 pub struct SessionGuard<'a> {

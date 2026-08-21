@@ -1,3 +1,4 @@
+pub(crate) mod devices;
 mod native;
 mod rpc;
 mod switch;

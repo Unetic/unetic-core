@@ -2,7 +2,7 @@ use std::{collections::BTreeMap, path::Path};
 
 use serde_json::json;
 
-use super::{rpc, switch, wan, wireless};
+use super::{devices, rpc, switch, wan, wireless};
 use crate::{
     backend::RouterBackend,
     errors::{DomainError, ErrorCode, ErrorStage},
@@ -181,5 +181,9 @@ impl RouterBackend for OpenWrtBackend {
 
     fn read_system_info(&self) -> Result<crate::system::SystemInfo, DomainError> {
         Ok(super::system::read_system_info())
+    }
+
+    fn read_devices(&self) -> Result<Vec<crate::device::Device>, DomainError> {
+        devices::read_devices()
     }
 }

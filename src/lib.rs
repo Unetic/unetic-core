@@ -10,6 +10,7 @@
 pub mod api;
 pub mod app;
 pub mod backend;
+pub mod device;
 pub mod errors;
 pub mod model;
 pub mod openwrt;
@@ -22,6 +23,7 @@ pub mod wan;
 
 pub use app::{App, Timing};
 pub use backend::{MemoryBackend, RouterBackend};
+pub use device::Device;
 pub use storage::StateStore;
 pub use switch::{
     SwitchArchitecture, SwitchFeatureStatus, SwitchFeatures, SwitchInfo, SwitchSocInfo,

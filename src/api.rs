@@ -41,6 +41,7 @@ pub fn dispatch(app: &Arc<App>, method: &str, request_json: &str) -> String {
         "wan.get" => Ok(json!(app.state().wan)),
         "switch.get" => Ok(json!(app.switch_get())),
         "system.info" => Ok(json!(app.system_info())),
+        "devices.list" => app.devices_list().map(|devices| json!(devices)),
         "operation.get" => Ok(app.last_or_active_operation()),
         "maintenance.get" => Ok(json!(app.maintenance_get())),
         "health.get" => Ok(json!(app.health())),
@@ -114,4 +115,32 @@ fn encode_error(app: &App, error: DomainError) -> String {
         state: app.state(),
     })
     .unwrap_or_else(|_| r#"{"api_version":1,"ok":false}"#.into())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{Arc, mpsc};
+
+    use crate::{App, Device, MemoryBackend, StateStore, api};
+
+    #[test]
+    fn test_api_dispatch_devices_list() {
+        let backend = Arc::new(MemoryBackend::new("Home", &["radio0"]));
+        let (tx, _rx) = mpsc::channel();
+        let store = StateStore::new(std::env::temp_dir().join("unetic-test-devices-list-api"));
+        let app = App::bootstrap(backend, store, tx);
+
+        let response_str = api::dispatch(&app, "devices.list", "{}");
+        let val: serde_json::Value = serde_json::from_str(&response_str).expect("valid json");
+        assert_eq!(val.get("ok").and_then(|v| v.as_bool()), Some(true));
+
+        let devices: Vec<Device> =
+            serde_json::from_value(val.get("result").cloned().expect("result field"))
+                .expect("valid devices array");
+        assert_eq!(devices.len(), 3);
+        assert_eq!(devices[0].mac, "00:11:22:33:44:55");
+        assert_eq!(devices[0].connection_type, "Wireless");
+        assert_eq!(devices[1].mac, "66:77:88:99:aa:bb");
+        assert_eq!(devices[1].connection_type, "Wired");
+    }
 }

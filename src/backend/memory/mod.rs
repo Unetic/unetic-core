@@ -9,6 +9,7 @@ use crate::{
     model::{DiscoveredWan, DiscoveredWifi, WanDesired, WanProtocol, WanPublicState, WanStatus},
 };
 
+mod mock;
 mod wan;
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -348,55 +349,14 @@ impl RouterBackend for MemoryBackend {
     }
 
     fn read_switch_info(&self) -> Result<crate::switch::SwitchInfo, DomainError> {
-        Ok(crate::switch::SwitchInfo {
-            soc: crate::switch::SwitchSocInfo {
-                model: "mt7531".into(),
-                vendor: "MediaTek".into(),
-                compatible: Some("mediatek,mt7531".into()),
-                driver: Some("mt7530-mdio".into()),
-                architecture: crate::switch::SwitchArchitecture::Dsa,
-                tagging_protocol: Some("mtk".into()),
-                ports: vec![
-                    "lan1".into(),
-                    "lan2".into(),
-                    "lan3".into(),
-                    "lan4".into(),
-                    "wan".into(),
-                ],
-            },
-            features: crate::switch::SwitchFeatures {
-                l2_hw_switching: crate::switch::SwitchFeatureStatus::static_hw(true),
-                l3_hw_flow_offload: crate::switch::SwitchFeatureStatus::new(true, true, true),
-                l3_sw_flow_offload: crate::switch::SwitchFeatureStatus::new(true, true, true),
-                vlan_filtering_8021q: crate::switch::SwitchFeatureStatus::new(true, false, true),
-                port_isolation: crate::switch::SwitchFeatureStatus::new(true, false, true),
-                hw_igmp_snooping: crate::switch::SwitchFeatureStatus::new(true, true, true),
-                flow_control_8023x: crate::switch::SwitchFeatureStatus::new(true, false, true),
-                eee_8023az: crate::switch::SwitchFeatureStatus::new(true, false, true),
-                stp_rstp: crate::switch::SwitchFeatureStatus::new(true, false, true),
-                mirroring_span: crate::switch::SwitchFeatureStatus::new(true, false, true),
-                jumbo_frames: crate::switch::SwitchFeatureStatus::new(true, false, true),
-                link_aggregation_lag: crate::switch::SwitchFeatureStatus::new(true, false, true),
-                tdr_cable_diag: crate::switch::SwitchFeatureStatus::static_hw(true),
-                hardware_stats: crate::switch::SwitchFeatureStatus::static_hw(true),
-            },
-        })
+        Ok(mock::mock_switch_info())
     }
 
     fn read_system_info(&self) -> Result<crate::system::SystemInfo, DomainError> {
-        Ok(crate::system::SystemInfo {
-            hostname: "OpenWrt".into(),
-            model: "MediaTek MT7981B (Filogic 820)".into(),
-            board_name: "bananapi,bpi-r3-mini".into(),
-            firmware_version: "25.12.5".into(),
-            firmware_revision: "r12345-abcdef".into(),
-            target: "mediatek/filogic".into(),
-            arch: "aarch64_cortex-a53".into(),
-            kernel_version: "6.6.86".into(),
-            uptime_secs: 86400,
-            load_average: [0.12, 0.08, 0.05],
-            memory_total_kb: 524288,
-            memory_available_kb: 412672,
-        })
+        Ok(mock::mock_system_info())
+    }
+
+    fn read_devices(&self) -> Result<Vec<crate::device::Device>, DomainError> {
+        Ok(mock::mock_devices())
     }
 }

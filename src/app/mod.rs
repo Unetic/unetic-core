@@ -231,4 +231,8 @@ impl App {
     pub fn system_info(&self) -> crate::system::SystemInfo {
         self.backend.read_system_info().unwrap_or_default()
     }
+
+    pub fn devices_list(&self) -> Result<Vec<crate::device::Device>, DomainError> {
+        self.backend.read_devices()
+    }
 }
