@@ -4,7 +4,10 @@ use super::MemoryBackend;
 use crate::{
     backend::RouterBackend,
     errors::{DomainError, ErrorCode, ErrorStage},
-    model::{DiscoveredWan, DiscoveredWifi, WanDesired, WanPublicState, WifiNetworkConfig},
+    model::{
+        DiscoveredWan, DiscoveredWifi, WanDesired, WanProtocol, WanPublicState, WanStatus,
+        WifiNetworkConfig,
+    },
 };
 
 impl RouterBackend for MemoryBackend {
@@ -173,6 +176,15 @@ impl RouterBackend for MemoryBackend {
         state
             .wan_rollback_snapshots
             .insert(session.to_owned(), wan_snapshot);
+        if wan_staged.present {
+            state.wan_runtime.present = true;
+            state.wan_runtime.proto = wan_staged.proto;
+            state.wan_runtime.status = WanStatus::Connected;
+        } else {
+            state.wan_runtime.present = false;
+            state.wan_runtime.proto = WanProtocol::None;
+            state.wan_runtime.status = WanStatus::NotConfigured;
+        }
         state.wan_committed = wan_staged;
         Ok(())
     }
@@ -205,6 +217,15 @@ impl RouterBackend for MemoryBackend {
             state.sessions.insert(session.to_owned(), snapshot);
         }
         if let Some(wan_snapshot) = state.wan_rollback_snapshots.remove(session) {
+            if wan_snapshot.present {
+                state.wan_runtime.present = true;
+                state.wan_runtime.proto = wan_snapshot.proto;
+                state.wan_runtime.status = WanStatus::Connected;
+            } else {
+                state.wan_runtime.present = false;
+                state.wan_runtime.proto = WanProtocol::None;
+                state.wan_runtime.status = WanStatus::NotConfigured;
+            }
             state.wan_committed = wan_snapshot.clone();
             state.wan_sessions.insert(session.to_owned(), wan_snapshot);
         }

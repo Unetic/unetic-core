@@ -29,7 +29,7 @@ pub fn validate_wan_desired(desired: &WanDesired) -> Result<(), DomainError> {
                 "WAN protocol must be specified when WAN is present",
             ));
         }
-        WanProtocol::Dhcp => {}
+        WanProtocol::Dhcp | WanProtocol::Extender => {}
         WanProtocol::Static => {
             let Some(static_cfg) = &desired.static_config else {
                 return Err(DomainError::new(
@@ -196,4 +196,39 @@ fn validate_mtu(mtu: u16, proto: WanProtocol) -> Result<(), DomainError> {
         ));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::WanDesired;
+
+    #[test]
+    fn test_validate_extender_protocol() {
+        let desired = WanDesired {
+            present: true,
+            proto: WanProtocol::Extender,
+            ..Default::default()
+        };
+        assert!(validate_wan_desired(&desired).is_ok());
+    }
+
+    #[test]
+    fn test_validate_extender_protocol_mtu() {
+        let desired_ok = WanDesired {
+            present: true,
+            proto: WanProtocol::Extender,
+            custom_mtu: Some(1500),
+            ..Default::default()
+        };
+        assert!(validate_wan_desired(&desired_ok).is_ok());
+
+        let desired_err = WanDesired {
+            present: true,
+            proto: WanProtocol::Extender,
+            custom_mtu: Some(1501),
+            ..Default::default()
+        };
+        assert!(validate_wan_desired(&desired_err).is_err());
+    }
 }

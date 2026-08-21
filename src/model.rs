@@ -52,6 +52,7 @@ pub enum WanProtocol {
     Dhcp,
     Static,
     Pppoe,
+    Extender,
     None,
 }
 

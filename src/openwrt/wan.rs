@@ -19,6 +19,7 @@ pub fn parse_discovered_wan(value: &Value) -> DiscoveredWan {
         "dhcp" => WanProtocol::Dhcp,
         "static" => WanProtocol::Static,
         "pppoe" => WanProtocol::Pppoe,
+        "extender" => WanProtocol::Extender,
         _ if proto_str.is_empty() => WanProtocol::None,
         _ => WanProtocol::Dhcp,
     };
@@ -157,6 +158,9 @@ pub fn build_wan_staging_values(config: &WanDesired) -> Value {
                 }
             }
         }
+        WanProtocol::Extender => {
+            map.insert("proto".into(), Value::String("dhcp".into()));
+        }
         WanProtocol::None => {
             map.insert("proto".into(), Value::String("none".into()));
         }
@@ -190,6 +194,7 @@ pub fn parse_wan_runtime_status(value: &Value) -> WanPublicState {
         "dhcp" => WanProtocol::Dhcp,
         "static" => WanProtocol::Static,
         "pppoe" => WanProtocol::Pppoe,
+        "extender" => WanProtocol::Extender,
         _ if proto_str.is_empty() => WanProtocol::None,
         _ => WanProtocol::Dhcp,
     };
