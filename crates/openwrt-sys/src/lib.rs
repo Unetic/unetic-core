@@ -1,3 +1,16 @@
+//! Dynamic FFI bindings to `libunetic-openwrt.so`.
+//! 
+//! # Why dynamic loading (`dlopen`)?
+//! 
+//! This crate avoids linking directly against OpenWrt's `libubus.so` at compile time. 
+//! If we used a standard `#[link(name = "ubus")]` block, `cargo build` would fail 
+//! on macOS or standard Linux distributions unless the complete OpenWrt SDK is installed.
+//! 
+//! By dynamically resolving symbols at runtime via `dlopen`/`dlsym`, we allow the 
+//! `unetic_core` daemon to compile natively on any developer's machine (for local testing
+//! with the memory backend), while correctly delegating to the C ubus shim when running 
+//! on an actual OpenWrt router.
+
 #![allow(unsafe_code)]
 #![allow(clippy::pedantic)]
 #![allow(
@@ -148,11 +161,18 @@ struct Callback {
     handler: Arc<Handler>,
 }
 
+/// A registered ubus object server instance.
 pub struct Server {
     api: Arc<Api>,
     handle: *mut c_void,
     callback: *mut Callback,
 }
+
+// Server holds a C pointer to the ubus context. The OpenWrt C shim
+// guarantees that uloop/ubus polling is safe to move between threads 
+// as long as it is only polled by one thread at a time.
+unsafe impl Send for Server {}
+unsafe impl Sync for Server {}
 
 impl Server {
     pub fn poll(&mut self, timeout_ms: i32) -> Result<(), BridgeError> {

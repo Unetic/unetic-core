@@ -2,11 +2,7 @@
 
 use std::{
     path::PathBuf,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-        mpsc,
-    },
+    sync::{Arc, mpsc},
     time::Duration,
 };
 
@@ -58,55 +54,38 @@ async fn main() -> Result<()> {
         .server(move |method, request| api::dispatch(&callback_app, method, request))
         .context("failed to register ubus object 'unetic'")?;
 
-    let stopping = Arc::new(AtomicBool::new(false));
-    install_signal_handlers(Arc::clone(&stopping));
-
     info!("Unetic Core is ready on ubus object 'unetic'");
 
-    while !stopping.load(Ordering::Relaxed) {
-        if let Err(error) = server.poll(100) {
-            error!(%error, "ubus server poll failed");
-            tokio::time::sleep(Duration::from_millis(250)).await;
-        }
+    let mut shutdown_signal = std::pin::pin!(wait_for_signal());
 
-        while let Ok(state) = event_rx.try_recv() {
-            match serde_json::to_string(&state) {
-                Ok(json) => {
-                    if let Err(error) = server.notify("state.changed", &json) {
-                        warn!(%error, "failed to publish state.changed");
+    loop {
+        tokio::select! {
+            _ = &mut shutdown_signal => {
+                break;
+            }
+            _ = tokio::time::sleep(Duration::from_millis(0)) => {
+                if let Err(error) = server.poll(100) {
+                    error!(%error, "ubus server poll failed");
+                    tokio::time::sleep(Duration::from_millis(250)).await;
+                }
+
+                while let Ok(state) = event_rx.try_recv() {
+                    match serde_json::to_string(&state) {
+                        Ok(json) => {
+                            if let Err(error) = server.notify("state.changed", &json) {
+                                warn!(%error, "failed to publish state.changed");
+                            }
+                        }
+                        Err(error) => error!(%error, "failed to serialize state notification"),
                     }
                 }
-                Err(error) => error!(%error, "failed to serialize state notification"),
             }
         }
-
-        tokio::task::yield_now().await;
     }
 
     info!("shutting down");
     app.shutdown();
     Ok(())
-}
-
-fn install_signal_handlers(stopping: Arc<AtomicBool>) {
-    let ctrl_c = Arc::clone(&stopping);
-    tokio::spawn(async move {
-        if tokio::signal::ctrl_c().await.is_ok() {
-            ctrl_c.store(true, Ordering::Relaxed);
-        }
-    });
-
-    #[cfg(unix)]
-    {
-        use tokio::signal::unix::{SignalKind, signal};
-        let term = stopping;
-        tokio::spawn(async move {
-            if let Ok(mut stream) = signal(SignalKind::terminate()) {
-                stream.recv().await;
-                term.store(true, Ordering::Relaxed);
-            }
-        });
-    }
 }
 
 async fn wait_for_signal() {
