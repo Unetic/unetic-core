@@ -24,3 +24,4 @@ pub use storage::StateStore;
 pub use switch::{
     SwitchArchitecture, SwitchFeatureStatus, SwitchFeatures, SwitchInfo, SwitchSocInfo,
 };
+pub use system::SystemInfo;

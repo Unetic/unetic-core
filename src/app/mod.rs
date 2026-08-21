@@ -254,4 +254,10 @@ impl App {
             .read_switch_info()
             .unwrap_or_else(|_| SwitchInfo::generic_software())
     }
+
+    pub fn system_info(&self) -> crate::system::SystemInfo {
+        self.backend
+            .read_system_info()
+            .unwrap_or_default()
+    }
 }

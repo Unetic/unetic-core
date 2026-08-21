@@ -178,4 +178,8 @@ impl RouterBackend for OpenWrtBackend {
         let debug_root = Path::new("/sys/kernel/debug");
         Ok(switch::read_switch_info(sys_root, debug_root))
     }
+
+    fn read_system_info(&self) -> Result<crate::system::SystemInfo, DomainError> {
+        Ok(super::system::read_system_info())
+    }
 }

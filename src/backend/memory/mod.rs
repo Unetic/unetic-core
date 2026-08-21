@@ -382,4 +382,21 @@ impl RouterBackend for MemoryBackend {
             },
         })
     }
+
+    fn read_system_info(&self) -> Result<crate::system::SystemInfo, DomainError> {
+        Ok(crate::system::SystemInfo {
+            hostname: "OpenWrt".into(),
+            model: "MediaTek MT7981B (Filogic 820)".into(),
+            board_name: "bananapi,bpi-r3-mini".into(),
+            firmware_version: "25.12.5".into(),
+            firmware_revision: "r12345-abcdef".into(),
+            target: "mediatek/filogic".into(),
+            arch: "aarch64_cortex-a53".into(),
+            kernel_version: "6.6.86".into(),
+            uptime_secs: 86400,
+            load_average: [0.12, 0.08, 0.05],
+            memory_total_kb: 524288,
+            memory_available_kb: 412672,
+        })
+    }
 }

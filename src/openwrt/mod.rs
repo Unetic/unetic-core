@@ -1,6 +1,7 @@
 mod native;
 mod rpc;
 mod switch;
+pub(crate) mod system;
 mod wan;
 mod wireless;
 

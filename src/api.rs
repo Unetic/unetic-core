@@ -40,6 +40,7 @@ pub fn dispatch(app: &Arc<App>, method: &str, request_json: &str) -> String {
         "wifi.get" => Ok(json!(app.wifi_get())),
         "wan.get" => Ok(json!(app.state().wan)),
         "switch.get" => Ok(json!(app.switch_get())),
+        "system.info" => Ok(json!(app.system_info())),
         "operation.get" => Ok(app.last_or_active_operation()),
         "maintenance.get" => Ok(json!(app.maintenance_get())),
         "health.get" => Ok(json!(app.health())),
