@@ -66,21 +66,15 @@ impl App {
                             (false, Some(error))
                         }
                     };
-                let observed_ssids: BTreeMap<String, String> = observed_configs
-                    .iter()
-                    .map(|(t, c)| (t.clone(), c.ssid.clone()))
-                    .collect();
                 let mut inner = self.inner.lock().expect("app state poisoned");
                 let wireless_health = if runtime { "ok" } else { "error" };
                 let changed = inner.observed_configs != observed_configs
-                    || inner.observed != observed_ssids
                     || inner.runtime_healthy != runtime
                     || inner.health.wireless != wireless_health
                     || wan_changed
                     || runtime_error
                         .as_ref()
                         .is_some_and(|error| inner.last_system_error.as_ref() != Some(error));
-                inner.observed = observed_ssids;
                 inner.observed_configs = observed_configs;
                 inner.runtime_healthy = runtime;
                 inner.health.wireless = wireless_health.into();
@@ -130,7 +124,7 @@ pub(crate) fn snapshot(inner: &Inner) -> PublicState {
         WifiStatus::Applying
     } else if drifted {
         WifiStatus::Drifted
-    } else if inner.observed.is_empty() {
+    } else if inner.observed_configs.is_empty() {
         WifiStatus::Unknown
     } else {
         WifiStatus::Synced
@@ -153,7 +147,11 @@ pub(crate) fn snapshot(inner: &Inner) -> PublicState {
             encryption: desired.encryption.clone(),
             key: desired.key.clone(),
             targets: desired.targets.clone(),
-            observed: inner.observed.clone(),
+            observed: inner
+                .observed_configs
+                .iter()
+                .map(|(t, c)| (t.clone(), c.ssid.clone()))
+                .collect(),
             status: wifi_status,
         },
         wan: inner.wan.clone(),

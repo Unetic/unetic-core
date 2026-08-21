@@ -228,11 +228,6 @@ fn apply_wifi_success_state(
         inner.last_user_operation = Some(last);
     }
     inner.active_operation = None;
-    inner.observed = context
-        .targets
-        .iter()
-        .map(|t| (t.clone(), context.new_wifi.ssid.clone()))
-        .collect();
     inner.observed_configs = context
         .targets
         .iter()
