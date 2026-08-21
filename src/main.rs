@@ -9,7 +9,9 @@ use std::{
 use anyhow::{Context, Result};
 use tracing::{error, info, warn};
 use tracing_subscriber::EnvFilter;
-use unetic_core::{App, MemoryBackend, RouterBackend, StateStore, api, openwrt::OpenWrtBackend};
+use unetic_core::{
+    App, MemoryBackend, RouterBackend, StateStore, api, infrastructure::openwrt::OpenWrtBackend,
+};
 use unetic_openwrt_sys::Bridge;
 
 #[tokio::main(flavor = "current_thread")]

@@ -8,9 +8,9 @@ use std::{
 
 use unetic_core::{
     App, MemoryBackend, RouterBackend, StateStore, Timing,
-    backend::FailurePlan,
-    errors::ErrorCode,
-    model::{Lifecycle, OperationStatus, SetWifiConfigRequest, WifiNetworkConfig},
+    domain::errors::ErrorCode,
+    domain::{Lifecycle, OperationStatus, SetWifiConfigRequest, WifiNetworkConfig},
+    infrastructure::backend::FailurePlan,
 };
 
 fn test_app() -> (Arc<App>, Arc<MemoryBackend>) {
@@ -371,7 +371,7 @@ fn api_keeps_domain_errors_in_structured_success_payload() {
 
 #[test]
 fn crash_recovery_reports_interrupted_uncommitted_user_operation() {
-    use unetic_core::model::{
+    use unetic_core::domain::{
         DesiredConfig, OperationSource, STATE_SCHEMA_VERSION, TransactionJournal,
     };
 
@@ -396,7 +396,7 @@ fn crash_recovery_reports_interrupted_uncommitted_user_operation() {
                 key: None,
                 targets: vec!["default_radio0".into(), "default_radio1".into()],
             },
-            unetic_core::model::WanDesired::default(),
+            unetic_core::domain::WanDesired::default(),
         ))
         .expect("desired state");
     store
@@ -430,7 +430,7 @@ fn crash_recovery_reports_interrupted_uncommitted_user_operation() {
 
 #[test]
 fn crash_recovery_finishes_durable_user_intent() {
-    use unetic_core::model::{
+    use unetic_core::domain::{
         DesiredConfig, OperationSource, STATE_SCHEMA_VERSION, TransactionJournal,
     };
 
@@ -454,7 +454,7 @@ fn crash_recovery_finishes_durable_user_intent() {
             key: None,
             targets: vec!["default_radio0".into(), "default_radio1".into()],
         },
-        unetic_core::model::WanDesired::default(),
+        unetic_core::domain::WanDesired::default(),
     );
     desired.revision = 2;
     store.persist_config(&desired).expect("desired state");

@@ -7,26 +7,15 @@
     clippy::too_many_lines
 )]
 
-pub mod api;
-pub mod app;
-pub mod backend;
-pub mod device;
-pub mod errors;
-pub mod model;
-pub mod openwrt;
-pub mod storage;
-pub mod switch;
-pub mod system;
-pub mod tools;
-pub mod transaction;
-pub mod wan;
+pub mod application;
+pub mod domain;
+pub mod infrastructure;
+pub mod presentation;
 
-pub use app::{App, Timing};
-pub use backend::{MemoryBackend, RouterBackend};
-pub use device::Device;
-pub use storage::StateStore;
-pub use switch::{
-    SwitchArchitecture, SwitchFeatureStatus, SwitchFeatures, SwitchInfo, SwitchSocInfo,
+pub use application::{App, Timing};
+pub use domain::{
+    Device, SwitchArchitecture, SwitchFeatureStatus, SwitchFeatures, SwitchInfo, SwitchSocInfo,
+    SystemInfo,
 };
-pub use system::SystemInfo;
-pub use tools::{PingRequest, PingResult};
+pub use infrastructure::{MemoryBackend, RouterBackend, StateStore, openwrt};
+pub use presentation::api;

@@ -9,7 +9,7 @@ use std::{
 use serde_json::json;
 use unetic_core::{
     App, MemoryBackend, StateStore, Timing, api,
-    model::{OperationStatus, SetWanRequest, WanDesired, WanProtocol, WanStatus},
+    domain::{OperationStatus, SetWanRequest, WanDesired, WanProtocol, WanStatus},
     openwrt::{build_wan_staging_values, parse_discovered_wan, parse_wan_runtime_status},
 };
 
