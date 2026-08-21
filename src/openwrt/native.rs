@@ -6,9 +6,7 @@ use super::{devices, rpc, switch, wan, wireless};
 use crate::{
     backend::RouterBackend,
     errors::{DomainError, ErrorCode, ErrorStage},
-    model::{
-        DiscoveredWan, DiscoveredWifi, WanDesired, WanPublicState, WifiNetworkConfig,
-    },
+    model::{DiscoveredWan, DiscoveredWifi, WanDesired, WanPublicState, WifiNetworkConfig},
 };
 
 pub struct OpenWrtBackend;

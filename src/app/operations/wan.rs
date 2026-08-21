@@ -1,7 +1,7 @@
 use tracing::error;
 
 use crate::{
-    app::{App, state::now_ms},
+    app::{App, Inner, state::now_ms},
     errors::{DomainError, ErrorCode, ErrorStage},
     model::{LastOperation, Lifecycle, OperationSource, OperationStatus},
     wan::WanChangeContext,
@@ -37,49 +37,20 @@ impl App {
             .expect("app state poisoned")
             .config
             .revision;
-        let last = LastOperation {
-            id: context.operation_id.clone(),
-            request_id: context.request_id.clone(),
-            source: context.source,
-            kind: "wan.set_config".into(),
-            status: OperationStatus::Succeeded,
-            revision,
-            requested_ssid: String::new(),
-            error: None,
-            finished_at_ms: now_ms(),
-        };
+        let last = make_wan_last_op(context, OperationStatus::Succeeded, revision, None);
 
-        let mut completion_store_error = None;
+        let mut store_error = None;
         if context.source == OperationSource::User
             && let Err(error) = self.store.clear_transaction()
         {
             error!(%error, "configuration was committed but transaction journal cleanup failed");
-            completion_store_error = Some(error);
+            store_error = Some(error);
         }
 
         let wan_status = self.backend.read_wan_runtime_status().unwrap_or_default();
         {
             let mut inner = self.inner.lock().expect("app state poisoned");
-            if context.source == OperationSource::User {
-                inner.last_user_operation = Some(last);
-            }
-            inner.active_operation = None;
-            inner.wan = wan_status;
-            inner.repair_failures = 0;
-            if let Some(store_error) = completion_store_error {
-                inner.lifecycle = Lifecycle::Degraded;
-                inner.health.core = "error".into();
-                inner.last_system_error = Some(store_error);
-            } else {
-                if !inner.maintenance {
-                    inner.lifecycle = Lifecycle::Ready;
-                }
-                inner.health.core = "ok".into();
-                if context.source != OperationSource::User {
-                    inner.last_system_error = None;
-                }
-            }
-            inner.health.wan = "ok".into();
+            apply_wan_success_state(&mut inner, context, last, wan_status, store_error);
         }
         self.publish();
         Ok(())
@@ -98,21 +69,12 @@ impl App {
             .expect("app state poisoned")
             .config
             .revision;
-        let last = LastOperation {
-            id: context.operation_id.clone(),
-            request_id: context.request_id.clone(),
-            source: context.source,
-            kind: "wan.set_config".into(),
-            status: if rollback_failed {
-                OperationStatus::RollbackFailed
-            } else {
-                OperationStatus::Failed
-            },
-            revision,
-            requested_ssid: String::new(),
-            error: Some(error.clone()),
-            finished_at_ms: now_ms(),
+        let status = if rollback_failed {
+            OperationStatus::RollbackFailed
+        } else {
+            OperationStatus::Failed
         };
+        let last = make_wan_last_op(context, status, revision, Some(error.clone()));
 
         let mut store_failed = false;
         if context.source == OperationSource::User
@@ -126,26 +88,15 @@ impl App {
         let wan_status = self.backend.read_wan_runtime_status().unwrap_or_default();
         {
             let mut inner = self.inner.lock().expect("app state poisoned");
-            if context.source == OperationSource::User {
-                inner.last_user_operation = Some(last);
-                if store_failed {
-                    inner.last_system_error = Some(DomainError::new(
-                        ErrorCode::StateStoreFailed,
-                        ErrorStage::Persist,
-                        "failed to clear transaction journal",
-                    ));
-                }
-            } else {
-                inner.repair_failures = inner.repair_failures.saturating_add(1);
-                inner.last_system_error = Some(error.clone());
-            }
-            inner.active_operation = None;
-            inner.wan = wan_status;
-            if rollback_failed || store_failed || inner.repair_failures >= 3 {
-                inner.lifecycle = Lifecycle::Degraded;
-                inner.health.core = "error".into();
-            }
-            inner.health.wan = "error".into();
+            apply_wan_failure_state(
+                &mut inner,
+                context,
+                last,
+                wan_status,
+                error,
+                rollback_failed,
+                store_failed,
+            );
         }
         self.refresh_observed();
         self.publish();
@@ -169,17 +120,12 @@ impl App {
             .expect("app state poisoned")
             .config
             .revision;
-        let last = LastOperation {
-            id: context.operation_id.clone(),
-            request_id: context.request_id.clone(),
-            source: context.source,
-            kind: "wan.set_config".into(),
-            status: OperationStatus::Failed,
+        let last = make_wan_last_op(
+            context,
+            OperationStatus::Failed,
             revision,
-            requested_ssid: String::new(),
-            error: Some(uncertain.clone()),
-            finished_at_ms: now_ms(),
-        };
+            Some(uncertain.clone()),
+        );
 
         {
             let mut inner = self.inner.lock().expect("app state poisoned");
@@ -193,4 +139,85 @@ impl App {
         }
         self.publish();
     }
+}
+
+fn make_wan_last_op(
+    context: &WanChangeContext,
+    status: OperationStatus,
+    revision: u64,
+    error: Option<DomainError>,
+) -> LastOperation {
+    LastOperation {
+        id: context.operation_id.clone(),
+        request_id: context.request_id.clone(),
+        source: context.source,
+        kind: "wan.set_config".into(),
+        status,
+        revision,
+        requested_ssid: String::new(),
+        error,
+        finished_at_ms: now_ms(),
+    }
+}
+
+fn apply_wan_success_state(
+    inner: &mut Inner,
+    context: &WanChangeContext,
+    last: LastOperation,
+    wan_status: crate::model::WanPublicState,
+    store_error: Option<DomainError>,
+) {
+    if context.source == OperationSource::User {
+        inner.last_user_operation = Some(last);
+    }
+    inner.active_operation = None;
+    inner.wan = wan_status;
+    inner.repair_failures = 0;
+    inner.health.wan = "ok".into();
+
+    if let Some(err) = store_error {
+        inner.lifecycle = Lifecycle::Degraded;
+        inner.health.core = "error".into();
+        inner.last_system_error = Some(err);
+    } else {
+        if !inner.maintenance {
+            inner.lifecycle = Lifecycle::Ready;
+        }
+        inner.health.core = "ok".into();
+        if context.source != OperationSource::User {
+            inner.last_system_error = None;
+        }
+    }
+}
+
+fn apply_wan_failure_state(
+    inner: &mut Inner,
+    context: &WanChangeContext,
+    last: LastOperation,
+    wan_status: crate::model::WanPublicState,
+    error: DomainError,
+    rollback_failed: bool,
+    store_failed: bool,
+) {
+    if context.source == OperationSource::User {
+        inner.last_user_operation = Some(last);
+        if store_failed {
+            inner.last_system_error = Some(DomainError::new(
+                ErrorCode::StateStoreFailed,
+                ErrorStage::Persist,
+                "failed to clear transaction journal",
+            ));
+        }
+    } else {
+        inner.repair_failures = inner.repair_failures.saturating_add(1);
+        inner.last_system_error = Some(error);
+    }
+
+    inner.active_operation = None;
+    inner.wan = wan_status;
+    if rollback_failed || store_failed || inner.repair_failures >= 3 {
+        inner.lifecycle = Lifecycle::Degraded;
+        inner.health.core = "error".into();
+    }
+    inner.health.wan = "error".into();
 }

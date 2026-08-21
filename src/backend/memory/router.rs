@@ -18,9 +18,9 @@ impl RouterBackend for MemoryBackend {
                 "no AP targets found",
             ));
         };
-        if configs.any(|c| {
-            c.ssid != first.ssid || c.encryption != first.encryption || c.key != first.key
-        }) {
+        if configs
+            .any(|c| c.ssid != first.ssid || c.encryption != first.encryption || c.key != first.key)
+        {
             return Err(DomainError::new(
                 ErrorCode::AmbiguousWifiConfig,
                 ErrorStage::Bootstrap,

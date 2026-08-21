@@ -10,9 +10,7 @@ use unetic_core::{
     App, MemoryBackend, RouterBackend, StateStore, Timing,
     backend::FailurePlan,
     errors::ErrorCode,
-    model::{
-        Lifecycle, OperationStatus, SetWifiConfigRequest, WifiNetworkConfig,
-    },
+    model::{Lifecycle, OperationStatus, SetWifiConfigRequest, WifiNetworkConfig},
 };
 
 fn test_app() -> (Arc<App>, Arc<MemoryBackend>) {
@@ -274,7 +272,9 @@ fn same_request_id_is_idempotent_while_active_or_finished() {
         expected_revision: 1,
         request_id: "same-id".into(),
     };
-    let first = app.wifi_set_config(request.clone()).expect("first accepted");
+    let first = app
+        .wifi_set_config(request.clone())
+        .expect("first accepted");
     let second = app.wifi_set_config(request).expect("duplicate accepted");
     assert_eq!(first.operation_id, second.operation_id);
 

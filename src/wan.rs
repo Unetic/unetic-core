@@ -77,90 +77,22 @@ fn execute_wan(app: &Arc<App>, context: &WanChangeContext) -> Result<(), DomainE
         error.with_operation(&context.operation_id, context.request_id.as_deref())
     })?;
 
-    app.set_operation_status_with_kind(
-        &context.operation_id,
-        "wan.set_config",
-        OperationStatus::Staging,
-        None,
-    )?;
-    if let Err(error) = app.backend.stage_wan_config(&session.id, &context.new_wan) {
-        let _ = app.backend.revert_staged(&session.id);
-        app.complete_wan_failure(context, attach(error, context), false);
-        return Ok(());
-    }
-
-    app.set_operation_status_with_kind(
-        &context.operation_id,
-        "wan.set_config",
-        OperationStatus::Applying,
-        None,
-    )?;
-    if let Err(error) = app
-        .backend
-        .apply(&session.id, app.timing.rpcd_rollback_timeout_secs)
-    {
+    if let Err(error) = stage_and_apply_wan(app, context, &session.id) {
         let _ = app.backend.rollback(&session.id);
         let _ = app.backend.revert_staged(&session.id);
         app.complete_wan_failure(context, attach(error, context), false);
         return Ok(());
     }
 
-    app.set_operation_status_with_kind(
-        &context.operation_id,
-        "wan.set_config",
-        OperationStatus::Verifying,
-        None,
-    )?;
-    if context.new_wan.present {
-        let deadline = Instant::now() + app.timing.verify_timeout;
-        let mut ok = false;
-        while Instant::now() < deadline {
-            if let Ok(st) = app.backend.read_wan_runtime_status()
-                && (st.status == WanStatus::Connected || st.status == WanStatus::Connecting)
-            {
-                ok = true;
-                break;
-            }
-            thread::sleep(app.timing.verify_sample_delay);
-        }
-        if !ok {
-            warn!("WAN verification timed out; rolling back");
-            let _ = app.backend.rollback(&session.id);
-            app.complete_wan_failure(
-                context,
-                DomainError::new(
-                    ErrorCode::VerifyTimeout,
-                    ErrorStage::Verify,
-                    "WAN interface did not become ready",
-                ),
-                false,
-            );
-            return Ok(());
-        }
+    if let Err(error) = verify_wan_ready(app, context) {
+        let _ = app.backend.rollback(&session.id);
+        app.complete_wan_failure(context, attach(error, context), false);
+        return Ok(());
     }
 
-    if context.source == OperationSource::User {
-        app.set_operation_status_with_kind(
-            &context.operation_id,
-            "wan.set_config",
-            OperationStatus::Persisting,
-            None,
-        )?;
-        if let Err(error) = app.persist_new_desired_wan(context) {
-            let _ = app.backend.rollback(&session.id);
-            app.complete_wan_failure(context, attach(error, context), false);
-            return Ok(());
-        }
-    }
-
-    app.set_operation_status_with_kind(
-        &context.operation_id,
-        "wan.set_config",
-        OperationStatus::Confirming,
-        None,
-    )?;
-    if let Err(error) = app.backend.confirm(&session.id) {
-        if context.source == OperationSource::User {
+    if let Err(error) = persist_and_confirm_wan(app, context, &session.id) {
+        let _ = app.backend.rollback(&session.id);
+        if context.source == OperationSource::User && error.code == ErrorCode::ConfirmFailed {
             app.mark_wan_commit_uncertain(context, error);
             return Ok(());
         }
@@ -171,6 +103,83 @@ fn execute_wan(app: &Arc<App>, context: &WanChangeContext) -> Result<(), DomainE
     info!("WAN configuration confirmed successfully");
     app.complete_wan_success(context)?;
     Ok(())
+}
+
+fn stage_and_apply_wan(
+    app: &Arc<App>,
+    context: &WanChangeContext,
+    session_id: &str,
+) -> Result<(), DomainError> {
+    app.set_operation_status_with_kind(
+        &context.operation_id,
+        "wan.set_config",
+        OperationStatus::Staging,
+        None,
+    )?;
+    app.backend.stage_wan_config(session_id, &context.new_wan)?;
+
+    app.set_operation_status_with_kind(
+        &context.operation_id,
+        "wan.set_config",
+        OperationStatus::Applying,
+        None,
+    )?;
+    app.backend
+        .apply(session_id, app.timing.rpcd_rollback_timeout_secs)
+}
+
+fn verify_wan_ready(app: &Arc<App>, context: &WanChangeContext) -> Result<(), DomainError> {
+    app.set_operation_status_with_kind(
+        &context.operation_id,
+        "wan.set_config",
+        OperationStatus::Verifying,
+        None,
+    )?;
+
+    if !context.new_wan.present {
+        return Ok(());
+    }
+
+    let deadline = Instant::now() + app.timing.verify_timeout;
+    while Instant::now() < deadline {
+        if let Ok(st) = app.backend.read_wan_runtime_status() {
+            if matches!(st.status, WanStatus::Connected | WanStatus::Connecting) {
+                return Ok(());
+            }
+        }
+        thread::sleep(app.timing.verify_sample_delay);
+    }
+
+    warn!("WAN verification timed out; rolling back");
+    Err(DomainError::new(
+        ErrorCode::VerifyTimeout,
+        ErrorStage::Verify,
+        "WAN interface did not become ready",
+    ))
+}
+
+fn persist_and_confirm_wan(
+    app: &Arc<App>,
+    context: &WanChangeContext,
+    session_id: &str,
+) -> Result<(), DomainError> {
+    if context.source == OperationSource::User {
+        app.set_operation_status_with_kind(
+            &context.operation_id,
+            "wan.set_config",
+            OperationStatus::Persisting,
+            None,
+        )?;
+        app.persist_new_desired_wan(context)?;
+    }
+
+    app.set_operation_status_with_kind(
+        &context.operation_id,
+        "wan.set_config",
+        OperationStatus::Confirming,
+        None,
+    )?;
+    app.backend.confirm(session_id)
 }
 
 fn attach(error: DomainError, context: &WanChangeContext) -> DomainError {

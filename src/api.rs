@@ -53,7 +53,7 @@ pub fn dispatch(app: &Arc<App>, method: &str, request_json: &str) -> String {
                     format!("invalid wifi.set_config request: {error}"),
                 )
             })
-            .and_then(|request| app.wifi_set_config(request).map(|result| json!(result))),
+            .and_then(|request| app.set_wifi_config(request).map(|result| json!(result))),
         "wan.set" | "wan.set_config" => {
             serde_json::from_value::<crate::model::SetWanRequest>(request)
                 .map_err(|error| {

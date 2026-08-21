@@ -8,6 +8,8 @@ use crate::{
     model::{DiscoveredWifi, WifiNetworkConfig},
 };
 
+type WifiCandidate = (String, String, String, Option<String>);
+
 pub fn discover_primary_wifi() -> Result<DiscoveredWifi, DomainError> {
     let response = uci_get_config("wireless", None, None, None)?;
     let values = response
@@ -21,44 +23,10 @@ pub fn discover_primary_wifi() -> Result<DiscoveredWifi, DomainError> {
             )
         })?;
 
-    let mut candidates = Vec::new();
-    for (name, section) in values {
-        let Some(section) = section.as_object() else {
-            continue;
-        };
-        if section.get(".type").and_then(Value::as_str) != Some("wifi-iface")
-            || section.get("mode").and_then(Value::as_str) != Some("ap")
-            || section.get("disabled").is_some_and(is_truthy)
-        {
-            continue;
-        }
-
-        let belongs_to_lan = section.get("network").is_some_and(|network| match network {
-            Value::String(value) => value.split_ascii_whitespace().any(|part| part == "lan"),
-            Value::Array(values) => values.iter().any(|value| value.as_str() == Some("lan")),
-            _ => false,
-        });
-        if !belongs_to_lan {
-            continue;
-        }
-
-        let Some(ssid) = section.get("ssid").and_then(Value::as_str) else {
-            continue;
-        };
-        if ssid.is_empty() {
-            continue;
-        }
-        let encryption = section
-            .get("encryption")
-            .and_then(Value::as_str)
-            .unwrap_or("none")
-            .to_owned();
-        let key = section
-            .get("key")
-            .and_then(Value::as_str)
-            .map(str::to_owned);
-        candidates.push((name.clone(), ssid.to_owned(), encryption, key));
-    }
+    let candidates: Vec<WifiCandidate> = values
+        .iter()
+        .filter_map(|(name, section)| parse_lan_ap_candidate(name, section))
+        .collect();
 
     if candidates.is_empty() {
         return Err(DomainError::new(
@@ -68,13 +36,12 @@ pub fn discover_primary_wifi() -> Result<DiscoveredWifi, DomainError> {
         ));
     }
 
-    let first_ssid = candidates[0].1.clone();
-    let first_enc = candidates[0].2.clone();
-    let first_key = candidates[0].3.clone();
-    if candidates
+    let first = &candidates[0];
+    let differs = candidates
         .iter()
-        .any(|(_, ssid, enc, key)| ssid != &first_ssid || enc != &first_enc || key != &first_key)
-    {
+        .any(|(_, ssid, enc, key)| ssid != &first.1 || enc != &first.2 || key != &first.3);
+
+    if differs {
         return Err(DomainError::new(
             ErrorCode::AmbiguousWifiConfig,
             ErrorStage::Bootstrap,
@@ -83,11 +50,47 @@ pub fn discover_primary_wifi() -> Result<DiscoveredWifi, DomainError> {
     }
 
     Ok(DiscoveredWifi {
-        ssid: first_ssid,
-        encryption: first_enc,
-        key: first_key,
+        ssid: first.1.clone(),
+        encryption: first.2.clone(),
+        key: first.3.clone(),
         targets: candidates.into_iter().map(|(name, _, _, _)| name).collect(),
     })
+}
+
+fn parse_lan_ap_candidate(name: &str, section: &Value) -> Option<WifiCandidate> {
+    let section = section.as_object()?;
+    if section.get(".type").and_then(Value::as_str) != Some("wifi-iface")
+        || section.get("mode").and_then(Value::as_str) != Some("ap")
+        || section.get("disabled").is_some_and(is_truthy)
+    {
+        return None;
+    }
+
+    let belongs_to_lan = section.get("network").is_some_and(|network| match network {
+        Value::String(value) => value.split_ascii_whitespace().any(|part| part == "lan"),
+        Value::Array(values) => values.iter().any(|value| value.as_str() == Some("lan")),
+        _ => false,
+    });
+    if !belongs_to_lan {
+        return None;
+    }
+
+    let ssid = section.get("ssid").and_then(Value::as_str)?;
+    if ssid.is_empty() {
+        return None;
+    }
+
+    let encryption = section
+        .get("encryption")
+        .and_then(Value::as_str)
+        .unwrap_or("none")
+        .to_owned();
+    let key = section
+        .get("key")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+
+    Some((name.to_owned(), ssid.to_owned(), encryption, key))
 }
 
 pub fn read_wifi_configs(
@@ -96,52 +99,54 @@ pub fn read_wifi_configs(
 ) -> Result<BTreeMap<String, WifiNetworkConfig>, DomainError> {
     let mut result = BTreeMap::new();
     for target in targets {
-        let response = uci_get_config("wireless", Some(target), None, session)?;
-        let values = response
-            .get("values")
-            .and_then(Value::as_object)
-            .ok_or_else(|| {
-                DomainError::new(
-                    ErrorCode::TargetMissing,
-                    ErrorStage::Verify,
-                    format!("target {target} has no UCI values table"),
-                )
-            })?;
-        let ssid = values
-            .get("ssid")
-            .and_then(Value::as_str)
-            .ok_or_else(|| {
-                DomainError::new(
-                    ErrorCode::TargetMissing,
-                    ErrorStage::Verify,
-                    format!("target {target} has no SSID option"),
-                )
-            })?
-            .to_owned();
-        let encryption = values
-            .get("encryption")
-            .and_then(Value::as_str)
-            .unwrap_or("none")
-            .to_owned();
-        let key = values
-            .get("key")
-            .and_then(Value::as_str)
-            .map(str::to_owned);
-
-        result.insert(
-            target.clone(),
-            WifiNetworkConfig {
-                ssid,
-                encryption,
-                key,
-                targets: vec![target.clone()],
-            },
-        );
+        let config = read_target_wifi_config(target, session)?;
+        result.insert(target.clone(), config);
     }
     Ok(result)
 }
 
+fn read_target_wifi_config(
+    target: &str,
+    session: Option<&str>,
+) -> Result<WifiNetworkConfig, DomainError> {
+    let response = uci_get_config("wireless", Some(target), None, session)?;
+    let values = response
+        .get("values")
+        .and_then(Value::as_object)
+        .ok_or_else(|| {
+            DomainError::new(
+                ErrorCode::TargetMissing,
+                ErrorStage::Verify,
+                format!("target {target} has no UCI values table"),
+            )
+        })?;
 
+    let ssid = values
+        .get("ssid")
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            DomainError::new(
+                ErrorCode::TargetMissing,
+                ErrorStage::Verify,
+                format!("target {target} has no SSID option"),
+            )
+        })?
+        .to_owned();
+
+    let encryption = values
+        .get("encryption")
+        .and_then(Value::as_str)
+        .unwrap_or("none")
+        .to_owned();
+    let key = values.get("key").and_then(Value::as_str).map(str::to_owned);
+
+    Ok(WifiNetworkConfig {
+        ssid,
+        encryption,
+        key,
+        targets: vec![target.to_owned()],
+    })
+}
 
 pub fn stage_wifi_config(
     session: &str,
@@ -152,10 +157,10 @@ pub fn stage_wifi_config(
         let mut values = serde_json::Map::new();
         values.insert("ssid".into(), json!(config.ssid));
         values.insert("encryption".into(), json!(config.encryption));
-        if config.encryption != "none" {
-            if let Some(key) = &config.key {
-                values.insert("key".into(), json!(key));
-            }
+        if config.encryption != "none"
+            && let Some(key) = &config.key
+        {
+            values.insert("key".into(), json!(key));
         }
 
         call_ubus(
@@ -197,19 +202,12 @@ pub fn check_runtime_healthy(targets: &[String], ssid: &str) -> Result<bool, Dom
     };
 
     for target in targets {
-        let mut matched = false;
-        for radio in radios.values() {
-            let Some(interfaces) = radio.get("interfaces").and_then(Value::as_array) else {
-                continue;
-            };
-            if interfaces
-                .iter()
-                .any(|iface| runtime_target_matches(iface, target, ssid))
-            {
-                matched = true;
-                break;
-            }
-        }
+        let matched = radios
+            .values()
+            .filter_map(|r| r.get("interfaces").and_then(Value::as_array))
+            .flatten()
+            .any(|iface| runtime_target_matches(iface, target, ssid));
+
         if !matched {
             return Ok(false);
         }

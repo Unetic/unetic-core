@@ -1,7 +1,7 @@
 use tracing::error;
 
 use crate::{
-    app::{App, state::now_ms},
+    app::{App, Inner, state::now_ms},
     errors::{DomainError, ErrorCode, ErrorStage},
     model::{LastOperation, Lifecycle, OperationSource, OperationStatus},
     transaction::ChangeContext,
@@ -59,62 +59,19 @@ impl App {
             .expect("app state poisoned")
             .config
             .revision;
-        let last = LastOperation {
-            id: context.operation_id.clone(),
-            request_id: context.request_id.clone(),
-            source: context.source,
-            kind: "wifi.set_config".into(),
-            status: OperationStatus::Succeeded,
-            revision,
-            requested_ssid: context.new_wifi.ssid.clone(),
-            error: None,
-            finished_at_ms: now_ms(),
-        };
+        let last = make_wifi_last_op(context, OperationStatus::Succeeded, revision, None);
 
-        let mut completion_store_error = None;
+        let mut store_error = None;
         if context.source == OperationSource::User
             && let Err(error) = self.store.clear_transaction()
         {
             error!(%error, "configuration was committed but transaction journal cleanup failed");
-            completion_store_error = Some(error);
+            store_error = Some(error);
         }
 
         {
             let mut inner = self.inner.lock().expect("app state poisoned");
-            if context.source == OperationSource::User {
-                inner.last_user_operation = Some(last);
-            }
-            inner.active_operation = None;
-            inner.observed = context
-                .targets
-                .iter()
-                .map(|target| (target.clone(), context.new_wifi.ssid.clone()))
-                .collect();
-            inner.observed_configs = context
-                .targets
-                .iter()
-                .map(|target| {
-                    let mut cfg = context.new_wifi.clone();
-                    cfg.targets = vec![target.clone()];
-                    (target.clone(), cfg)
-                })
-                .collect();
-            inner.runtime_healthy = true;
-            inner.repair_failures = 0;
-            if let Some(store_error) = completion_store_error {
-                inner.lifecycle = Lifecycle::Degraded;
-                inner.health.core = "error".into();
-                inner.last_system_error = Some(store_error);
-            } else {
-                if !inner.maintenance {
-                    inner.lifecycle = Lifecycle::Ready;
-                }
-                inner.health.core = "ok".into();
-                if context.source != OperationSource::User {
-                    inner.last_system_error = None;
-                }
-            }
-            inner.health.wireless = "ok".into();
+            apply_wifi_success_state(&mut inner, context, last, store_error);
         }
         self.publish();
         Ok(())
@@ -133,21 +90,12 @@ impl App {
             .expect("app state poisoned")
             .config
             .revision;
-        let last = LastOperation {
-            id: context.operation_id.clone(),
-            request_id: context.request_id.clone(),
-            source: context.source,
-            kind: "wifi.set_config".into(),
-            status: if rollback_failed {
-                OperationStatus::RollbackFailed
-            } else {
-                OperationStatus::Failed
-            },
-            revision,
-            requested_ssid: context.new_wifi.ssid.clone(),
-            error: Some(error.clone()),
-            finished_at_ms: now_ms(),
+        let status = if rollback_failed {
+            OperationStatus::RollbackFailed
+        } else {
+            OperationStatus::Failed
         };
+        let last = make_wifi_last_op(context, status, revision, Some(error.clone()));
 
         let mut store_failed = false;
         if context.source == OperationSource::User
@@ -160,25 +108,14 @@ impl App {
 
         {
             let mut inner = self.inner.lock().expect("app state poisoned");
-            if context.source == OperationSource::User {
-                inner.last_user_operation = Some(last);
-                if store_failed {
-                    inner.last_system_error = Some(DomainError::new(
-                        ErrorCode::StateStoreFailed,
-                        ErrorStage::Persist,
-                        "failed to clear transaction journal",
-                    ));
-                }
-            } else {
-                inner.repair_failures = inner.repair_failures.saturating_add(1);
-                inner.last_system_error = Some(error.clone());
-            }
-            inner.active_operation = None;
-            if rollback_failed || store_failed || inner.repair_failures >= 3 {
-                inner.lifecycle = Lifecycle::Degraded;
-                inner.health.core = "error".into();
-            }
-            inner.health.wireless = "error".into();
+            apply_wifi_failure_state(
+                &mut inner,
+                context,
+                last,
+                error,
+                rollback_failed,
+                store_failed,
+            );
         }
         self.refresh_observed();
         self.publish();
@@ -202,17 +139,12 @@ impl App {
             .expect("app state poisoned")
             .config
             .revision;
-        let last = LastOperation {
-            id: context.operation_id.clone(),
-            request_id: context.request_id.clone(),
-            source: context.source,
-            kind: "wifi.set_config".into(),
-            status: OperationStatus::Failed,
+        let last = make_wifi_last_op(
+            context,
+            OperationStatus::Failed,
             revision,
-            requested_ssid: context.new_wifi.ssid.clone(),
-            error: Some(uncertain.clone()),
-            finished_at_ms: now_ms(),
-        };
+            Some(uncertain.clone()),
+        );
 
         {
             let mut inner = self.inner.lock().expect("app state poisoned");
@@ -265,4 +197,96 @@ impl App {
             .expect("app state poisoned")
             .last_user_operation = Some(last);
     }
+}
+
+fn make_wifi_last_op(
+    context: &ChangeContext,
+    status: OperationStatus,
+    revision: u64,
+    error: Option<DomainError>,
+) -> LastOperation {
+    LastOperation {
+        id: context.operation_id.clone(),
+        request_id: context.request_id.clone(),
+        source: context.source,
+        kind: "wifi.set_config".into(),
+        status,
+        revision,
+        requested_ssid: context.new_wifi.ssid.clone(),
+        error,
+        finished_at_ms: now_ms(),
+    }
+}
+
+fn apply_wifi_success_state(
+    inner: &mut Inner,
+    context: &ChangeContext,
+    last: LastOperation,
+    store_error: Option<DomainError>,
+) {
+    if context.source == OperationSource::User {
+        inner.last_user_operation = Some(last);
+    }
+    inner.active_operation = None;
+    inner.observed = context
+        .targets
+        .iter()
+        .map(|t| (t.clone(), context.new_wifi.ssid.clone()))
+        .collect();
+    inner.observed_configs = context
+        .targets
+        .iter()
+        .map(|t| {
+            let mut cfg = context.new_wifi.clone();
+            cfg.targets = vec![t.clone()];
+            (t.clone(), cfg)
+        })
+        .collect();
+    inner.runtime_healthy = true;
+    inner.repair_failures = 0;
+    inner.health.wireless = "ok".into();
+
+    if let Some(err) = store_error {
+        inner.lifecycle = Lifecycle::Degraded;
+        inner.health.core = "error".into();
+        inner.last_system_error = Some(err);
+    } else {
+        if !inner.maintenance {
+            inner.lifecycle = Lifecycle::Ready;
+        }
+        inner.health.core = "ok".into();
+        if context.source != OperationSource::User {
+            inner.last_system_error = None;
+        }
+    }
+}
+
+fn apply_wifi_failure_state(
+    inner: &mut Inner,
+    context: &ChangeContext,
+    last: LastOperation,
+    error: DomainError,
+    rollback_failed: bool,
+    store_failed: bool,
+) {
+    if context.source == OperationSource::User {
+        inner.last_user_operation = Some(last);
+        if store_failed {
+            inner.last_system_error = Some(DomainError::new(
+                ErrorCode::StateStoreFailed,
+                ErrorStage::Persist,
+                "failed to clear transaction journal",
+            ));
+        }
+    } else {
+        inner.repair_failures = inner.repair_failures.saturating_add(1);
+        inner.last_system_error = Some(error);
+    }
+
+    inner.active_operation = None;
+    if rollback_failed || store_failed || inner.repair_failures >= 3 {
+        inner.lifecycle = Lifecycle::Degraded;
+        inner.health.core = "error".into();
+    }
+    inner.health.wireless = "error".into();
 }

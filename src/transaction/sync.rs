@@ -94,9 +94,7 @@ pub fn force_state_sync(
     };
     if targets.iter().any(|target| {
         staged.get(target).is_none_or(|cfg| {
-            cfg.ssid != config.ssid
-                || cfg.encryption != config.encryption
-                || cfg.key != config.key
+            cfg.ssid != config.ssid || cfg.encryption != config.encryption || cfg.key != config.key
         })
     }) {
         let _ = app.backend.revert_staged(&session.id);

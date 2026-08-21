@@ -2,9 +2,7 @@ use std::collections::BTreeMap;
 
 use crate::{
     errors::DomainError,
-    model::{
-        DiscoveredWan, DiscoveredWifi, WanDesired, WanPublicState, WifiNetworkConfig,
-    },
+    model::{DiscoveredWan, DiscoveredWifi, WanDesired, WanPublicState, WifiNetworkConfig},
 };
 
 pub mod memory;

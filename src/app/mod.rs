@@ -98,50 +98,18 @@ impl App {
         timing: Timing,
     ) -> Arc<Self> {
         let store_ready = store.ensure();
-        let mut startup_error = store_ready.as_ref().err().cloned();
-        let boot_id = generate_id("boot");
-        let last = None;
+        let store_err = store_ready.as_ref().err().cloned();
+        let (config, lifecycle, init_error) = load_initial_config(backend.as_ref(), &store);
+        let startup_error = store_err.or(init_error);
 
-        let (config, lifecycle) = match store.load_config() {
-            Ok(Some(config)) if config.schema_version == 1 => (config, Lifecycle::Booting),
-            Ok(Some(_)) => {
-                warn!("unsupported desired-state schema");
-                startup_error = Some(DomainError::new(
-                    ErrorCode::StateCorrupt,
-                    ErrorStage::Bootstrap,
-                    "unsupported desired-state schema",
-                ));
-                (DesiredConfig::empty(), Lifecycle::Degraded)
-            }
-            Ok(None) => match backend.discover_primary_wifi() {
-                Ok(discovered) => {
-                    let wan = backend
-                        .discover_primary_wan()
-                        .map_or_else(|_| crate::model::WanDesired::default(), |w| w.to_desired());
-                    let config = DesiredConfig::new(discovered.to_network_config(), wan);
-                    if let Err(error) = store.persist_config(&config) {
-                        warn!(%error, "failed to persist discovered default config");
-                        startup_error = Some(error);
-                        (config, Lifecycle::Degraded)
-                    } else {
-                        (config, Lifecycle::Booting)
-                    }
-                }
-                Err(error) => {
-                    warn!(%error, "failed to discover Wi-Fi interfaces during bootstrap");
-                    startup_error = Some(error);
-                    (DesiredConfig::empty(), Lifecycle::NeedsSetup)
-                }
-            },
-            Err(error) => {
-                error!(%error, "failed to read desired state from disk");
-                startup_error = Some(error);
-                (DesiredConfig::empty(), Lifecycle::Degraded)
-            }
+        let boot_id = generate_id("boot");
+        let wan_status = backend.read_wan_runtime_status().unwrap_or_default();
+        let initial_core_health = if lifecycle == Lifecycle::Degraded {
+            "error".into()
+        } else {
+            "ok".into()
         };
 
-        let active_operation = None;
-        let wan_status = backend.read_wan_runtime_status().unwrap_or_default();
         let app = Arc::new(Self {
             backend,
             store,
@@ -155,17 +123,13 @@ impl App {
                 observed_configs: BTreeMap::new(),
                 runtime_healthy: false,
                 wan: wan_status,
-                active_operation,
-                last_user_operation: last,
+                active_operation: None,
+                last_user_operation: None,
                 last_system_error: startup_error,
                 event_seq: 0,
                 boot_id,
                 health: HealthState {
-                    core: if lifecycle == Lifecycle::Degraded {
-                        "error".into()
-                    } else {
-                        "ok".into()
-                    },
+                    core: initial_core_health,
                     ubus: "ok".into(),
                     rpcd: "ok".into(),
                     wireless: "unknown".into(),
@@ -238,5 +202,52 @@ impl App {
 
     pub fn devices_list(&self) -> Result<Vec<crate::device::Device>, DomainError> {
         self.backend.read_devices()
+    }
+}
+
+fn load_initial_config(
+    backend: &dyn RouterBackend,
+    store: &StateStore,
+) -> (DesiredConfig, Lifecycle, Option<DomainError>) {
+    match store.load_config() {
+        Ok(Some(config)) if config.schema_version == 1 => (config, Lifecycle::Booting, None),
+        Ok(Some(_)) => {
+            warn!("unsupported desired-state schema");
+            let error = DomainError::new(
+                ErrorCode::StateCorrupt,
+                ErrorStage::Bootstrap,
+                "unsupported desired-state schema",
+            );
+            (DesiredConfig::empty(), Lifecycle::Degraded, Some(error))
+        }
+        Ok(None) => discover_default_config(backend, store),
+        Err(error) => {
+            error!(%error, "failed to read desired state from disk");
+            (DesiredConfig::empty(), Lifecycle::Degraded, Some(error))
+        }
+    }
+}
+
+fn discover_default_config(
+    backend: &dyn RouterBackend,
+    store: &StateStore,
+) -> (DesiredConfig, Lifecycle, Option<DomainError>) {
+    match backend.discover_primary_wifi() {
+        Ok(discovered) => {
+            let wan = backend
+                .discover_primary_wan()
+                .map_or_else(|_| crate::model::WanDesired::default(), |w| w.to_desired());
+            let config = DesiredConfig::new(discovered.to_network_config(), wan);
+            if let Err(error) = store.persist_config(&config) {
+                warn!(%error, "failed to persist discovered default config");
+                (config, Lifecycle::Degraded, Some(error))
+            } else {
+                (config, Lifecycle::Booting, None)
+            }
+        }
+        Err(error) => {
+            warn!(%error, "failed to discover Wi-Fi interfaces during bootstrap");
+            (DesiredConfig::empty(), Lifecycle::NeedsSetup, Some(error))
+        }
     }
 }

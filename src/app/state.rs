@@ -12,8 +12,8 @@ use super::{App, Inner};
 use crate::{
     errors::{DomainError, ErrorCode, ErrorStage},
     model::{
-        API_VERSION, DriftState, MaintenanceState, PublicState, WifiNetworkConfig,
-        WifiPublicState, WifiStatus,
+        API_VERSION, DriftState, MaintenanceState, PublicState, WifiNetworkConfig, WifiPublicState,
+        WifiStatus,
     },
 };
 
