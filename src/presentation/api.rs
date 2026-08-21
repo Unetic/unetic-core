@@ -6,18 +6,16 @@ use serde_json::{Value, json};
 use crate::{
     application::app::App,
     domain::errors::{DomainError, ErrorCode, ErrorStage},
-    domain::{API_VERSION, SetWifiConfigRequest},
+    domain::SetWifiConfigRequest,
 };
 
 #[derive(Serialize)]
 struct ApiEnvelope<T: Serialize> {
-    api_version: u32,
     ok: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     result: Option<T>,
     #[serde(skip_serializing_if = "Option::is_none")]
     error: Option<DomainError>,
-    state: crate::domain::PublicState,
 }
 
 pub fn dispatch(app: &Arc<App>, method: &str, request_json: &str) -> String {
@@ -25,7 +23,6 @@ pub fn dispatch(app: &Arc<App>, method: &str, request_json: &str) -> String {
         Ok(request) => request,
         Err(error) => {
             return encode_error(
-                app,
                 DomainError::new(
                     ErrorCode::InvalidArgument,
                     ErrorStage::Validate,
@@ -90,31 +87,27 @@ pub fn dispatch(app: &Arc<App>, method: &str, request_json: &str) -> String {
     };
 
     match response {
-        Ok(result) => encode_ok(app, result),
-        Err(error) => encode_error(app, error),
+        Ok(result) => encode_ok(result),
+        Err(error) => encode_error(error),
     }
 }
 
-fn encode_ok(app: &App, result: Value) -> String {
+fn encode_ok(result: Value) -> String {
     serde_json::to_string(&ApiEnvelope {
-        api_version: API_VERSION,
         ok: true,
         result: Some(result),
         error: None,
-        state: app.state(),
     })
-    .unwrap_or_else(|_| r#"{"api_version":1,"ok":false}"#.into())
+    .unwrap_or_else(|_| r#"{"ok":false}"#.into())
 }
 
-fn encode_error(app: &App, error: DomainError) -> String {
+fn encode_error(error: DomainError) -> String {
     serde_json::to_string(&ApiEnvelope::<Value> {
-        api_version: API_VERSION,
         ok: false,
         result: None,
         error: Some(error),
-        state: app.state(),
     })
-    .unwrap_or_else(|_| r#"{"api_version":1,"ok":false}"#.into())
+    .unwrap_or_else(|_| r#"{"ok":false}"#.into())
 }
 
 #[cfg(test)]

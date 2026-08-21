@@ -12,7 +12,7 @@ use super::{App, Inner};
 use crate::{
     domain::errors::{DomainError, ErrorCode, ErrorStage},
     domain::{
-        API_VERSION, DriftState, MaintenanceState, PublicState, WifiNetworkConfig, WifiPublicState,
+        DriftState, MaintenanceState, PublicState, WifiNetworkConfig, WifiPublicState,
         WifiStatus,
     },
 };
@@ -131,7 +131,6 @@ pub(crate) fn snapshot(inner: &Inner) -> PublicState {
     };
 
     PublicState {
-        api_version: API_VERSION,
         core_version: env!("CARGO_PKG_VERSION").into(),
         boot_id: inner.boot_id.clone(),
         event_seq: inner.event_seq,

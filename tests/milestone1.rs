@@ -366,7 +366,6 @@ fn api_keeps_domain_errors_in_structured_success_payload() {
             .and_then(serde_json::Value::as_str),
         Some("INVALID_ARGUMENT")
     );
-    assert!(value.get("state").is_some());
 }
 
 #[test]

@@ -35,7 +35,6 @@ impl Default for SystemInfo {
     }
 }
 
-pub const API_VERSION: u32 = 1;
 pub const STATE_SCHEMA_VERSION: u32 = 1;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -88,7 +87,6 @@ use super::wifi::WifiPublicState;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PublicState {
-    pub api_version: u32,
     pub core_version: String,
     pub boot_id: String,
     pub event_seq: u64,
