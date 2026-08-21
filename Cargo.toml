@@ -5,7 +5,7 @@ description = "Unetic control plane for OpenWrt"
 repository = "https://github.com/Unetic/unetic-core"
 license = "GPL-2.0-only"
 edition = "2024"
-rust-version = "1.97"
+rust-version = "1.85"
 
 [dependencies]
 anyhow = "1.0"

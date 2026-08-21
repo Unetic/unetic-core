@@ -14,9 +14,13 @@ pub mod errors;
 pub mod model;
 pub mod openwrt;
 pub mod storage;
+pub mod switch;
 pub mod transaction;
 pub mod wan;
 
 pub use app::{App, Timing};
 pub use backend::{MemoryBackend, RouterBackend};
 pub use storage::StateStore;
+pub use switch::{
+    SwitchArchitecture, SwitchFeatureStatus, SwitchFeatures, SwitchInfo, SwitchSocInfo,
+};

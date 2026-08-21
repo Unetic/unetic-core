@@ -173,6 +173,29 @@ fn attach(error: DomainError, context: &WanChangeContext) -> DomainError {
     error.with_operation(&context.operation_id, context.request_id.as_deref())
 }
 
+pub fn force_wan_state_sync(
+    app: &App,
+    desired: &WanDesired,
+    _source: OperationSource,
+    _base_revision: u64,
+) -> Result<(), DomainError> {
+    let session = app.ensure_session()?;
+    if let Err(error) = app.backend.stage_wan_config(&session, desired) {
+        let _ = app.backend.revert_staged(&session);
+        return Err(error);
+    }
+    if let Err(error) = app
+        .backend
+        .apply(&session, app.timing.rpcd_rollback_timeout_secs)
+    {
+        let _ = app.backend.rollback(&session);
+        let _ = app.backend.revert_staged(&session);
+        return Err(error);
+    }
+    app.backend.confirm(&session)?;
+    Ok(())
+}
+
 pub fn validate_wan_request(request: &SetWanRequest) -> Result<(), DomainError> {
     if request.request_id.trim().is_empty() || request.request_id.len() > 128 {
         return Err(DomainError::new(
