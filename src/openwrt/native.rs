@@ -43,29 +43,23 @@ impl RouterBackend for OpenWrtBackend {
     }
 
     fn discover_primary_wan(&self) -> Result<DiscoveredWan, DomainError> {
-        let response = match rpc::uci_get_config("network", Some("wan"), None, None) {
-            Ok(res) => res,
-            Err(error) if error.code == ErrorCode::UciReadFailed => {
-                return Ok(DiscoveredWan {
-                    present: false,
-                    proto: crate::model::WanProtocol::None,
-                    ..DiscoveredWan::default()
-                });
-            }
-            Err(error) => return Err(error),
-        };
-        Ok(wan::parse_discovered_wan(&response))
+        match rpc::uci_get_config("network", Some("wan"), None, None) {
+            Ok(res) => Ok(wan::parse_discovered_wan(&res)),
+            Err(error) if error.code == ErrorCode::UciReadFailed => Ok(DiscoveredWan {
+                present: false,
+                proto: crate::model::WanProtocol::None,
+                ..DiscoveredWan::default()
+            }),
+            Err(error) => Err(error),
+        }
     }
 
     fn read_wan_config(&self, session: Option<&str>) -> Result<WanDesired, DomainError> {
-        let response = match rpc::uci_get_config("network", Some("wan"), None, session) {
-            Ok(res) => res,
-            Err(error) if error.code == ErrorCode::UciReadFailed => {
-                return Ok(WanDesired::default());
-            }
-            Err(error) => return Err(error),
-        };
-        Ok(wan::parse_discovered_wan(&response).to_desired())
+        match rpc::uci_get_config("network", Some("wan"), None, session) {
+            Ok(res) => Ok(wan::parse_discovered_wan(&res).to_desired()),
+            Err(error) if error.code == ErrorCode::UciReadFailed => Ok(WanDesired::default()),
+            Err(error) => Err(error),
+        }
     }
 
     fn stage_wan_config(&self, session: &str, config: &WanDesired) -> Result<(), DomainError> {

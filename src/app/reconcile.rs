@@ -64,26 +64,13 @@ impl App {
             let wan_drift = observed_wan.as_ref().is_some_and(|w| w != &inner.config.wan);
             let runtime_drift = !inner.runtime_healthy;
 
-            if inner.maintenance {
-                drop(inner);
-                if observation_changed {
-                    self.publish();
-                }
-                return;
-            }
-
-            if inner.lifecycle == Lifecycle::Degraded && inner.repair_failures >= 3 {
-                drop(inner);
-                if observation_changed {
-                    self.publish();
-                }
-                return;
-            }
-
-            if inner.active_operation.is_some()
+            let should_skip = inner.maintenance
+                || (inner.lifecycle == Lifecycle::Degraded && inner.repair_failures >= 3)
+                || inner.active_operation.is_some()
                 || inner.config.wifi.primary.targets.is_empty()
-                || matches!(inner.lifecycle, Lifecycle::NeedsSetup | Lifecycle::Booting)
-            {
+                || matches!(inner.lifecycle, Lifecycle::NeedsSetup | Lifecycle::Booting);
+
+            if should_skip {
                 drop(inner);
                 if observation_changed {
                     self.publish();

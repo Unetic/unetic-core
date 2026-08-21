@@ -18,24 +18,18 @@ pub fn read_switch_info(sys_root: &Path, debug_root: &Path) -> SwitchInfo {
 
 fn discover_dsa_ports(sys_root: &Path) -> Vec<String> {
     let net_dir = sys_root.join("class/net");
-    let mut ports = Vec::new();
-
     let Ok(entries) = fs::read_dir(net_dir) else {
-        return ports;
+        return Vec::new();
     };
 
-    for entry in entries.flatten() {
-        let uevent_path = entry.path().join("uevent");
-        let Ok(uevent_content) = fs::read_to_string(uevent_path) else {
-            continue;
-        };
-
-        if uevent_content.lines().any(|l| l == "DEVTYPE=dsa") {
-            if let Some(name) = entry.file_name().to_str() {
-                ports.push(name.to_owned());
-            }
-        }
-    }
+    let mut ports: Vec<String> = entries
+        .flatten()
+        .filter(|entry| {
+            fs::read_to_string(entry.path().join("uevent"))
+                .is_ok_and(|content| content.lines().any(|l| l == "DEVTYPE=dsa"))
+        })
+        .filter_map(|entry| entry.file_name().into_string().ok())
+        .collect();
 
     ports.sort();
     ports
@@ -194,30 +188,20 @@ fn is_bridge_flag_enabled(sys_root: &Path, flag: &str) -> bool {
         return false;
     };
 
-    for entry in entries.flatten() {
+    entries.flatten().any(|entry| {
         let flag_path = entry.path().join("bridge").join(flag);
-        if let Ok(content) = fs::read_to_string(flag_path) {
+        fs::read_to_string(flag_path).is_ok_and(|content| {
             let val = content.trim();
-            if val == "1" || (val.parse::<u32>().unwrap_or(0) > 0) {
-                return true;
-            }
-        }
-    }
-
-    false
+            val == "1" || val.parse::<u32>().is_ok_and(|v| v > 0)
+        })
+    })
 }
 
 fn is_port_flag_enabled(sys_root: &Path, ports: &[String], subpath: &str) -> bool {
-    for port in ports {
+    ports.iter().any(|port| {
         let flag_path = sys_root.join("class/net").join(port).join(subpath);
-        if let Ok(content) = fs::read_to_string(flag_path) {
-            if content.trim() == "1" {
-                return true;
-            }
-        }
-    }
-
-    false
+        fs::read_to_string(flag_path).is_ok_and(|content| content.trim() == "1")
+    })
 }
 
 fn has_jumbo_frame_support(sys_root: &Path, ports: &[String]) -> (bool, bool) {
@@ -226,19 +210,15 @@ fn has_jumbo_frame_support(sys_root: &Path, ports: &[String]) -> (bool, bool) {
 
     for port in ports {
         let port_dir = sys_root.join("class/net").join(port);
-        if let Ok(content) = fs::read_to_string(port_dir.join("max_mtu")) {
-            if let Ok(max) = content.trim().parse::<u32>() {
-                if max > 1500 {
-                    supported = true;
-                }
-            }
+        if fs::read_to_string(port_dir.join("max_mtu"))
+            .is_ok_and(|c| c.trim().parse::<u32>().is_ok_and(|max| max > 1500))
+        {
+            supported = true;
         }
-        if let Ok(content) = fs::read_to_string(port_dir.join("mtu")) {
-            if let Ok(cur) = content.trim().parse::<u32>() {
-                if cur > 1500 {
-                    enabled = true;
-                }
-            }
+        if fs::read_to_string(port_dir.join("mtu"))
+            .is_ok_and(|c| c.trim().parse::<u32>().is_ok_and(|cur| cur > 1500))
+        {
+            enabled = true;
         }
     }
 
