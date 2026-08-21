@@ -71,24 +71,24 @@ pub fn run_change(app: Arc<App>, context: ChangeContext) {
 }
 
 fn execute(app: &Arc<App>, context: &ChangeContext) -> Result<(), DomainError> {
-    let session = app.ensure_session().map_err(|error| {
+    let session = crate::backend::SessionGuard::new(app.backend.as_ref()).map_err(|error| {
         error.with_operation(&context.operation_id, context.request_id.as_deref())
     })?;
 
     app.set_operation_status(context, OperationStatus::Staging, None)?;
     if let Err(error) = app
         .backend
-        .stage_ssid(&session, &context.targets, &context.new_ssid)
+        .stage_ssid(&session.id, &context.targets, &context.new_ssid)
     {
-        let _ = app.backend.revert_staged(&session);
+        let _ = app.backend.revert_staged(&session.id);
         app.complete_failure(context, attach(error, context), false);
         return Ok(());
     }
 
-    let staged = match app.backend.read_ssids(&context.targets, Some(&session)) {
+    let staged = match app.backend.read_ssids(&context.targets, Some(&session.id)) {
         Ok(staged) => staged,
         Err(error) => {
-            let _ = app.backend.revert_staged(&session);
+            let _ = app.backend.revert_staged(&session.id);
             app.complete_failure(context, attach(error, context), false);
             return Ok(());
         }
@@ -99,7 +99,7 @@ fn execute(app: &Arc<App>, context: &ChangeContext) -> Result<(), DomainError> {
         .iter()
         .any(|target| staged.get(target) != Some(&context.new_ssid))
     {
-        let _ = app.backend.revert_staged(&session);
+        let _ = app.backend.revert_staged(&session.id);
         app.complete_failure(
             context,
             DomainError::new(
@@ -116,13 +116,10 @@ fn execute(app: &Arc<App>, context: &ChangeContext) -> Result<(), DomainError> {
     app.set_operation_status(context, OperationStatus::Applying, None)?;
     if let Err(error) = app
         .backend
-        .apply(&session, app.timing.rpcd_rollback_timeout_secs)
+        .apply(&session.id, app.timing.rpcd_rollback_timeout_secs)
     {
-        // An apply transport failure can be ambiguous: rpcd may have already
-        // committed and armed its rollback timer before the reply was lost.
-        // Attempt both rollback and staged-delta cleanup before reporting failure.
-        let _ = app.backend.rollback(&session);
-        let _ = app.backend.revert_staged(&session);
+        let _ = app.backend.rollback(&session.id);
+        let _ = app.backend.revert_staged(&session.id);
         app.complete_failure(context, attach(error, context), false);
         return Ok(());
     }
@@ -134,20 +131,20 @@ fn execute(app: &Arc<App>, context: &ChangeContext) -> Result<(), DomainError> {
         &context.new_ssid,
         app.timing.verify_timeout,
     ) {
-        rollback_to_old(app, context, &session, error);
+        rollback_to_old(app, context, &session.id, error);
         return Ok(());
     }
 
     if context.source == OperationSource::User {
         app.set_operation_status(context, OperationStatus::Persisting, None)?;
         if let Err(error) = app.persist_new_desired(context) {
-            rollback_to_old(app, context, &session, attach(error, context));
+            rollback_to_old(app, context, &session.id, attach(error, context));
             return Ok(());
         }
     }
 
     app.set_operation_status(context, OperationStatus::Confirming, None)?;
-    if let Err(error) = app.backend.confirm(&session) {
+    if let Err(error) = app.backend.confirm(&session.id) {
         if context.source == OperationSource::User {
             app.mark_commit_uncertain(context, error);
             return Ok(());
@@ -286,16 +283,16 @@ pub fn force_state_sync(
         ));
     }
 
-    let session = app.ensure_session()?;
-    if let Err(error) = app.backend.stage_ssid(&session, targets, ssid) {
-        let _ = app.backend.revert_staged(&session);
+    let session = crate::backend::SessionGuard::new(app.backend.as_ref())?;
+    if let Err(error) = app.backend.stage_ssid(&session.id, targets, ssid) {
+        let _ = app.backend.revert_staged(&session.id);
         return Err(error);
     }
 
-    let staged = match app.backend.read_ssids(targets, Some(&session)) {
+    let staged = match app.backend.read_ssids(targets, Some(&session.id)) {
         Ok(staged) => staged,
         Err(error) => {
-            let _ = app.backend.revert_staged(&session);
+            let _ = app.backend.revert_staged(&session.id);
             return Err(error);
         }
     };
@@ -303,7 +300,7 @@ pub fn force_state_sync(
         .iter()
         .any(|target| staged.get(target).is_none_or(|value| value != ssid))
     {
-        let _ = app.backend.revert_staged(&session);
+        let _ = app.backend.revert_staged(&session.id);
         return Err(DomainError::new(
             ErrorCode::UciStageMismatch,
             ErrorStage::Reconcile,
@@ -313,17 +310,17 @@ pub fn force_state_sync(
 
     if let Err(error) = app
         .backend
-        .apply(&session, app.timing.rpcd_rollback_timeout_secs)
+        .apply(&session.id, app.timing.rpcd_rollback_timeout_secs)
     {
-        let _ = app.backend.rollback(&session);
-        let _ = app.backend.revert_staged(&session);
+        let _ = app.backend.rollback(&session.id);
+        let _ = app.backend.revert_staged(&session.id);
         return Err(error);
     }
     if let Err(error) = verify(app, targets, ssid, app.timing.verify_timeout) {
-        let _ = app.backend.rollback(&session);
+        let _ = app.backend.rollback(&session.id);
         return Err(error);
     }
-    app.backend.confirm(&session)?;
+    app.backend.confirm(&session.id)?;
     Ok(())
 }
 

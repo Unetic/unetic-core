@@ -112,7 +112,7 @@ impl App {
                 });
             }
 
-            ChangeContext {
+            let context = ChangeContext {
                 operation_id: self.next_operation_id(),
                 request_id: Some(request.request_id.clone()),
                 source: OperationSource::User,
@@ -121,17 +121,16 @@ impl App {
                 old_ssid: inner.config.wifi.primary.ssid.clone(),
                 new_ssid: request.ssid.clone(),
                 targets: inner.config.wifi.primary.targets.clone(),
-            }
+            };
+            inner.active_operation = Some(context.public(OperationStatus::Accepted, None));
+            context
         };
 
         let journal = context.to_journal(OperationStatus::Accepted);
-        self.store.persist_transaction(&journal).map_err(|error| {
-            error.with_operation(&context.operation_id, context.request_id.as_deref())
-        })?;
-
-        {
+        if let Err(error) = self.store.persist_transaction(&journal) {
             let mut inner = self.inner.lock().expect("app state poisoned");
-            inner.active_operation = Some(context.public(OperationStatus::Accepted, None));
+            inner.active_operation = None;
+            return Err(error.with_operation(&context.operation_id, context.request_id.as_deref()));
         }
         self.publish();
 
@@ -239,7 +238,7 @@ impl App {
                 });
             }
 
-            WanChangeContext {
+            let context = WanChangeContext {
                 operation_id: self.next_operation_id(),
                 request_id: Some(request.request_id.clone()),
                 source: OperationSource::User,
@@ -247,17 +246,16 @@ impl App {
                 target_revision: inner.config.revision + 1,
                 old_wan: inner.config.wan.clone(),
                 new_wan: request.wan.clone(),
-            }
+            };
+            inner.active_operation = Some(context.public(OperationStatus::Accepted, None));
+            context
         };
 
         let journal = context.to_journal(OperationStatus::Accepted);
-        self.store.persist_transaction(&journal).map_err(|error| {
-            error.with_operation(&context.operation_id, context.request_id.as_deref())
-        })?;
-
-        {
+        if let Err(error) = self.store.persist_transaction(&journal) {
             let mut inner = self.inner.lock().expect("app state poisoned");
-            inner.active_operation = Some(context.public(OperationStatus::Accepted, None));
+            inner.active_operation = None;
+            return Err(error.with_operation(&context.operation_id, context.request_id.as_deref()));
         }
         self.publish();
 

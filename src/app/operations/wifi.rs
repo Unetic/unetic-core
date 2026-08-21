@@ -8,9 +8,6 @@ use crate::{
 };
 
 impl App {
-    pub(crate) fn ensure_session(&self) -> Result<String, DomainError> {
-        self.backend.create_session()
-    }
 
     pub(crate) fn set_operation_status(
         &self,

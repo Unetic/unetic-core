@@ -12,6 +12,7 @@ pub trait RouterBackend: Send + Sync {
     fn discover_primary_wifi(&self) -> Result<DiscoveredWifi, DomainError>;
     fn discover_primary_wan(&self) -> Result<DiscoveredWan, DomainError>;
     fn create_session(&self) -> Result<String, DomainError>;
+    fn destroy_session(&self, session: &str) -> Result<(), DomainError>;
     fn read_ssids(
         &self,
         targets: &[String],
@@ -28,4 +29,22 @@ pub trait RouterBackend: Send + Sync {
     fn runtime_healthy(&self, targets: &[String], ssid: &str) -> Result<bool, DomainError>;
     fn reload_wireless_runtime(&self) -> Result<(), DomainError>;
     fn read_switch_info(&self) -> Result<crate::switch::SwitchInfo, DomainError>;
+}
+
+pub struct SessionGuard<'a> {
+    pub id: String,
+    backend: &'a dyn RouterBackend,
+}
+
+impl<'a> SessionGuard<'a> {
+    pub fn new(backend: &'a dyn RouterBackend) -> Result<Self, DomainError> {
+        let id = backend.create_session()?;
+        Ok(Self { id, backend })
+    }
+}
+
+impl Drop for SessionGuard<'_> {
+    fn drop(&mut self) {
+        let _ = self.backend.destroy_session(&self.id);
+    }
 }

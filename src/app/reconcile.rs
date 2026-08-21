@@ -45,9 +45,11 @@ impl App {
 
     fn reconcile_once(self: &Arc<Self>) {
         let observation_changed = self.refresh_observed();
+        let observed_wan = self.backend.read_wan_config(None).ok();
 
         enum Repair {
             Config(ChangeContext),
+            WanConfig(crate::transaction::WanChangeContext),
             Runtime { targets: Vec<String>, ssid: String },
             None { publish: bool },
         }
@@ -59,6 +61,7 @@ impl App {
                 &inner.config.wifi.primary.targets,
                 &inner.config.wifi.primary.ssid,
             );
+            let wan_drift = observed_wan.as_ref().is_some_and(|w| w != &inner.config.wan);
             let runtime_drift = !inner.runtime_healthy;
 
             if inner.maintenance {
@@ -88,7 +91,7 @@ impl App {
                 return;
             }
 
-            if !config_drift && !runtime_drift {
+            if !config_drift && !wan_drift && !runtime_drift {
                 let mut publish = observation_changed;
                 if inner.repair_failures > 0 {
                     inner.repair_failures = 0;
@@ -116,7 +119,30 @@ impl App {
                 };
                 inner.active_operation = Some(context.public(OperationStatus::Accepted, None));
                 Repair::Config(context)
+            } else if wan_drift {
+                let context = crate::transaction::WanChangeContext {
+                    operation_id: self.next_operation_id(),
+                    request_id: None,
+                    source: OperationSource::Reconcile,
+                    base_revision: inner.config.revision,
+                    target_revision: inner.config.revision,
+                    old_wan: inner.config.wan.clone(),
+                    new_wan: inner.config.wan.clone(),
+                };
+                inner.active_operation = Some(context.public(OperationStatus::Accepted, None));
+                Repair::WanConfig(context)
             } else {
+                let context = ChangeContext {
+                    operation_id: self.next_operation_id(),
+                    request_id: None,
+                    source: OperationSource::Reconcile,
+                    base_revision: inner.config.revision,
+                    target_revision: inner.config.revision,
+                    old_ssid: inner.config.wifi.primary.ssid.clone(),
+                    new_ssid: inner.config.wifi.primary.ssid.clone(),
+                    targets: inner.config.wifi.primary.targets.clone(),
+                };
+                inner.active_operation = Some(context.public(OperationStatus::Accepted, None));
                 Repair::Runtime {
                     targets: inner.config.wifi.primary.targets.clone(),
                     ssid: inner.config.wifi.primary.ssid.clone(),
@@ -151,31 +177,70 @@ impl App {
                     self.publish();
                 }
             }
-            Repair::Runtime { targets, ssid } => {
-                if let Err(error) = self.repair_runtime(&targets, &ssid) {
-                    warn!(%error, "runtime-only wireless repair failed");
+            Repair::WanConfig(context) => {
+                self.publish();
+                let app = Arc::clone(self);
+                if thread::Builder::new()
+                    .name("unetic-reconcile-wan".into())
+                    .spawn(move || crate::wan::execute_wan(&app, &context))
+                    .is_err()
+                {
                     let mut inner = self.inner.lock().expect("app state poisoned");
+                    inner.active_operation = None;
                     inner.repair_failures = inner.repair_failures.saturating_add(1);
-                    inner.last_system_error = Some(error.clone());
+                    let error = DomainError::new(
+                        ErrorCode::ReconcileFailed,
+                        ErrorStage::Reconcile,
+                        "failed to start WAN reconciliation worker",
+                    )
+                    .retryable(true);
+                    inner.last_system_error = Some(error);
                     if inner.repair_failures >= 3 {
                         inner.lifecycle = Lifecycle::Degraded;
                         inner.health.core = "error".into();
                     }
-                    inner.health.wireless = "error".into();
                     drop(inner);
                     self.publish();
-                } else {
+                }
+            }
+            Repair::Runtime { targets, ssid } => {
+                let app = Arc::clone(self);
+                if thread::Builder::new()
+                    .name("unetic-repair".into())
+                    .spawn(move || {
+                        if let Err(error) = app.repair_runtime(&targets, &ssid) {
+                            warn!(%error, "runtime-only wireless repair failed");
+                            let mut inner = app.inner.lock().expect("app state poisoned");
+                            inner.active_operation = None;
+                            inner.repair_failures = inner.repair_failures.saturating_add(1);
+                            inner.last_system_error = Some(error.clone());
+                            if inner.repair_failures >= 3 {
+                                inner.lifecycle = Lifecycle::Degraded;
+                                inner.health.core = "error".into();
+                            }
+                            inner.health.wireless = "error".into();
+                            drop(inner);
+                            app.publish();
+                        } else {
+                            let mut inner = app.inner.lock().expect("app state poisoned");
+                            inner.active_operation = None;
+                            inner.repair_failures = 0;
+                            if inner.lifecycle == Lifecycle::Degraded {
+                                inner.lifecycle = Lifecycle::Ready;
+                            }
+                            inner.health.core = "ok".into();
+                            inner.health.wireless = "ok".into();
+                            inner.runtime_healthy = true;
+                            inner.last_system_error = None;
+                            drop(inner);
+                            app.publish();
+                        }
+                    })
+                    .is_err()
+                {
                     let mut inner = self.inner.lock().expect("app state poisoned");
-                    inner.repair_failures = 0;
-                    if inner.lifecycle == Lifecycle::Degraded {
-                        inner.lifecycle = Lifecycle::Ready;
-                    }
-                    inner.health.core = "ok".into();
-                    inner.health.wireless = "ok".into();
-                    inner.runtime_healthy = true;
-                    inner.last_system_error = None;
+                    inner.active_operation = None;
                     drop(inner);
-                    self.publish();
                 }
             }
             Repair::None { publish } => {

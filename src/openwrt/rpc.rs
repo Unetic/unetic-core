@@ -77,6 +77,16 @@ pub fn create_rpcd_session() -> Result<String, DomainError> {
     Ok(sid)
 }
 
+pub fn destroy_rpcd_session(session: &str) -> Result<(), DomainError> {
+    call_ubus(
+        "session",
+        "destroy",
+        json!({
+            "ubus_rpc_session": session
+        }),
+    ).map(|_| ())
+}
+
 pub fn uci_get_config(
     config: &str,
     section: Option<&str>,

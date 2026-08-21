@@ -23,7 +23,11 @@ impl RouterBackend for OpenWrtBackend {
     }
 
     fn create_session(&self) -> Result<String, DomainError> {
-        rpc::create_rpcd_session()
+        crate::openwrt::rpc::create_rpcd_session()
+    }
+
+    fn destroy_session(&self, session: &str) -> Result<(), DomainError> {
+        crate::openwrt::rpc::destroy_rpcd_session(session)
     }
 
     fn read_ssids(

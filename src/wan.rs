@@ -69,7 +69,7 @@ pub fn run_wan_change(app: Arc<App>, context: WanChangeContext) {
 }
 
 fn execute_wan(app: &Arc<App>, context: &WanChangeContext) -> Result<(), DomainError> {
-    let session = app.ensure_session().map_err(|error| {
+    let session = crate::backend::SessionGuard::new(app.backend.as_ref()).map_err(|error| {
         error.with_operation(&context.operation_id, context.request_id.as_deref())
     })?;
 
@@ -79,8 +79,8 @@ fn execute_wan(app: &Arc<App>, context: &WanChangeContext) -> Result<(), DomainE
         OperationStatus::Staging,
         None,
     )?;
-    if let Err(error) = app.backend.stage_wan_config(&session, &context.new_wan) {
-        let _ = app.backend.revert_staged(&session);
+    if let Err(error) = app.backend.stage_wan_config(&session.id, &context.new_wan) {
+        let _ = app.backend.revert_staged(&session.id);
         app.complete_wan_failure(context, attach(error, context), false);
         return Ok(());
     }
@@ -93,10 +93,10 @@ fn execute_wan(app: &Arc<App>, context: &WanChangeContext) -> Result<(), DomainE
     )?;
     if let Err(error) = app
         .backend
-        .apply(&session, app.timing.rpcd_rollback_timeout_secs)
+        .apply(&session.id, app.timing.rpcd_rollback_timeout_secs)
     {
-        let _ = app.backend.rollback(&session);
-        let _ = app.backend.revert_staged(&session);
+        let _ = app.backend.rollback(&session.id);
+        let _ = app.backend.revert_staged(&session.id);
         app.complete_wan_failure(context, attach(error, context), false);
         return Ok(());
     }
@@ -121,7 +121,7 @@ fn execute_wan(app: &Arc<App>, context: &WanChangeContext) -> Result<(), DomainE
         }
         if !ok {
             warn!("WAN verification timed out; rolling back");
-            let _ = app.backend.rollback(&session);
+            let _ = app.backend.rollback(&session.id);
             app.complete_wan_failure(
                 context,
                 DomainError::new(
@@ -143,7 +143,7 @@ fn execute_wan(app: &Arc<App>, context: &WanChangeContext) -> Result<(), DomainE
             None,
         )?;
         if let Err(error) = app.persist_new_desired_wan(context) {
-            let _ = app.backend.rollback(&session);
+            let _ = app.backend.rollback(&session.id);
             app.complete_wan_failure(context, attach(error, context), false);
             return Ok(());
         }
@@ -155,7 +155,7 @@ fn execute_wan(app: &Arc<App>, context: &WanChangeContext) -> Result<(), DomainE
         OperationStatus::Confirming,
         None,
     )?;
-    if let Err(error) = app.backend.confirm(&session) {
+    if let Err(error) = app.backend.confirm(&session.id) {
         if context.source == OperationSource::User {
             app.mark_wan_commit_uncertain(context, error);
             return Ok(());
@@ -179,20 +179,20 @@ pub fn force_wan_state_sync(
     _source: OperationSource,
     _base_revision: u64,
 ) -> Result<(), DomainError> {
-    let session = app.ensure_session()?;
-    if let Err(error) = app.backend.stage_wan_config(&session, desired) {
-        let _ = app.backend.revert_staged(&session);
+    let session = crate::backend::SessionGuard::new(app.backend.as_ref())?;
+    if let Err(error) = app.backend.stage_wan_config(&session.id, desired) {
+        let _ = app.backend.revert_staged(&session.id);
         return Err(error);
     }
     if let Err(error) = app
         .backend
-        .apply(&session, app.timing.rpcd_rollback_timeout_secs)
+        .apply(&session.id, app.timing.rpcd_rollback_timeout_secs)
     {
-        let _ = app.backend.rollback(&session);
-        let _ = app.backend.revert_staged(&session);
+        let _ = app.backend.rollback(&session.id);
+        let _ = app.backend.revert_staged(&session.id);
         return Err(error);
     }
-    app.backend.confirm(&session)?;
+    app.backend.confirm(&session.id)?;
     Ok(())
 }
 

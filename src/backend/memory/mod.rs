@@ -173,6 +173,15 @@ impl RouterBackend for MemoryBackend {
         Ok(sid)
     }
 
+    fn destroy_session(&self, session: &str) -> Result<(), DomainError> {
+        let mut state = self.state.lock().expect("memory backend poisoned");
+        state.sessions.remove(session);
+        state.wan_sessions.remove(session);
+        state.rollback_snapshots.remove(session);
+        state.wan_rollback_snapshots.remove(session);
+        Ok(())
+    }
+
     fn read_ssids(
         &self,
         targets: &[String],
