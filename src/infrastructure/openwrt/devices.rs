@@ -16,7 +16,6 @@ pub struct DhcpLease {
 #[derive(Debug, Clone)]
 pub struct ArpEntry {
     pub ip: String,
-    pub device: String,
 }
 
 pub fn parse_dhcp_leases(content: &str) -> HashMap<String, DhcpLease> {
@@ -57,42 +56,9 @@ pub fn parse_arp_table(content: &str) -> HashMap<String, ArpEntry> {
         }
 
         let ip = parts[0].to_string();
-        let device = parts.get(5).copied().unwrap_or("").to_string();
-        entries.insert(mac, ArpEntry { ip, device });
+        entries.insert(mac, ArpEntry { ip });
     }
     entries
-}
-
-pub fn parse_station_dump(stdout: &str) -> HashSet<String> {
-    let mut stations = HashSet::new();
-    for line in stdout.lines() {
-        if let Some(rest) = line.trim().strip_prefix("Station ") {
-            let mac = rest
-                .split_whitespace()
-                .next()
-                .unwrap_or("")
-                .to_ascii_lowercase();
-            if is_valid_mac(&mac) {
-                stations.insert(mac);
-            }
-        }
-    }
-    stations
-}
-
-pub fn parse_iwinfo_assoclist(stdout: &str) -> HashSet<String> {
-    let mut stations = HashSet::new();
-    for line in stdout.lines() {
-        let mac = line
-            .split_whitespace()
-            .next()
-            .unwrap_or("")
-            .to_ascii_lowercase();
-        if is_valid_mac(&mac) {
-            stations.insert(mac);
-        }
-    }
-    stations
 }
 
 fn is_valid_mac(mac: &str) -> bool {
@@ -103,8 +69,8 @@ fn is_valid_mac(mac: &str) -> bool {
             .all(|p| p.len() == 2 && p.chars().all(|c| c.is_ascii_hexdigit()))
 }
 
-pub fn get_wireless_macs() -> HashSet<String> {
-    let mut stations = HashSet::new();
+pub fn get_wireless_macs() -> HashMap<String, u8> {
+    let mut stations = HashMap::new();
     let mut ifaces = Vec::new();
 
     if let Ok(output) = Command::new("iw").arg("dev").output() {
@@ -140,19 +106,21 @@ pub fn get_wireless_macs() -> HashSet<String> {
     }
 
     for iface in ifaces {
-        if let Ok(output) = Command::new("iw")
-            .args(["dev", &iface, "station", "dump"])
+        if let Ok(output) = Command::new("ubus")
+            .args(["call", &format!("hostapd.{}", iface), "get_clients"])
             .output()
         {
             if output.status.success() {
-                stations.extend(parse_station_dump(&String::from_utf8_lossy(&output.stdout)));
-            }
-        }
-        if let Ok(output) = Command::new("iwinfo").args([&iface, "assoclist"]).output() {
-            if output.status.success() {
-                stations.extend(parse_iwinfo_assoclist(&String::from_utf8_lossy(
-                    &output.stdout,
-                )));
+                if let Ok(json) = serde_json::from_slice::<serde_json::Value>(&output.stdout) {
+                    if let Some(clients) = json.get("clients").and_then(|c| c.as_object()) {
+                        for (mac, info) in clients {
+                            if let Some(signal) = info.get("signal").and_then(|s| s.as_i64()) {
+                                let pct = std::cmp::min(100, std::cmp::max(0, 2 * (signal + 100))) as u8;
+                                stations.insert(mac.to_ascii_lowercase(), pct);
+                            }
+                        }
+                    }
+                }
             }
         }
     }
@@ -163,44 +131,46 @@ pub fn get_wireless_macs() -> HashSet<String> {
 pub fn merge_devices(
     dhcp_leases: HashMap<String, DhcpLease>,
     arp_entries: HashMap<String, ArpEntry>,
-    wireless_macs: HashSet<String>,
+    wireless_macs: HashMap<String, u8>,
+    mac_to_iface: HashMap<String, String>,
+    ip6_by_mac: HashMap<String, String>,
 ) -> Vec<Device> {
     let mut all_macs: HashSet<String> = HashSet::new();
     all_macs.extend(arp_entries.keys().cloned());
     all_macs.extend(dhcp_leases.keys().cloned());
+    all_macs.extend(ip6_by_mac.keys().cloned());
 
     let mut devices = Vec::new();
     for mac in all_macs {
         let arp = arp_entries.get(&mac);
         let dhcp = dhcp_leases.get(&mac);
 
-        let ip = match (arp, dhcp) {
-            (Some(a), _) => a.ip.clone(),
-            (None, Some(d)) => d.ip.clone(),
-            (None, None) => continue,
-        };
+        let ip = arp.map(|a| a.ip.clone()).or_else(|| dhcp.map(|d| d.ip.clone()));
+        let ip6 = ip6_by_mac.get(&mac).cloned();
+
+        if ip.is_none() && ip6.is_none() {
+            continue;
+        }
 
         let hostname = dhcp.and_then(|d| d.hostname.clone());
-        let is_wireless = wireless_macs.contains(&mac)
-            || arp.is_some_and(|a| a.device.starts_with("wlan") || a.device.starts_with("phy"));
+        let connection = if let Some(&signal_pct) = wireless_macs.get(&mac) {
+            crate::domain::device::DeviceConnection::Wireless { signal_pct }
+        } else if let Some(iface) = mac_to_iface.get(&mac) {
+            let port_id = iface.chars().filter(|c| c.is_ascii_digit()).collect::<String>().parse().unwrap_or(0);
+            crate::domain::device::DeviceConnection::Wired { port_id }
+        } else {
+            crate::domain::device::DeviceConnection::Unknown
+        };
 
-        devices.push(Device {
-            mac,
-            ip,
-            hostname,
-            connection_type: if is_wireless { "Wireless" } else { "Wired" }.to_owned(),
-        });
+        devices.push(Device { mac, ip, ip6, hostname, connection });
     }
 
+    // Sort by IPv4 first, fall back to MAC for stable ordering.
     devices.sort_by(|a, b| {
-        let ip_a = a.ip.parse::<Ipv4Addr>().map_or((255, 255, 255, 255), |ip| {
-            let o = ip.octets();
-            (o[0], o[1], o[2], o[3])
-        });
-        let ip_b = b.ip.parse::<Ipv4Addr>().map_or((255, 255, 255, 255), |ip| {
-            let o = ip.octets();
-            (o[0], o[1], o[2], o[3])
-        });
+        let ip_a = a.ip.as_deref().and_then(|s| s.parse::<Ipv4Addr>().ok())
+            .map_or([255u8; 4], |ip| ip.octets());
+        let ip_b = b.ip.as_deref().and_then(|s| s.parse::<Ipv4Addr>().ok())
+            .map_or([255u8; 4], |ip| ip.octets());
         ip_a.cmp(&ip_b).then_with(|| a.mac.cmp(&b.mac))
     });
 
@@ -213,7 +183,51 @@ pub fn read_devices() -> Result<Vec<Device>, LegacyAppError> {
     let dhcp_leases = parse_dhcp_leases(&dhcp_content);
     let arp_entries = parse_arp_table(&arp_content);
     let wireless_macs = get_wireless_macs();
-    Ok(merge_devices(dhcp_leases, arp_entries, wireless_macs))
+
+    let mut mac_to_iface: HashMap<String, String> = HashMap::new();
+    if let Ok(output) = Command::new("bridge").args(["fdb", "show", "dev", "br-lan"]).output() {
+        if output.status.success() {
+            if let Ok(fdb_str) = String::from_utf8(output.stdout) {
+                for line in fdb_str.lines() {
+                    let parts: Vec<&str> = line.split_whitespace().collect();
+                    if parts.len() >= 3 && parts[1] == "dev" {
+                        let mac = parts[0].to_lowercase();
+                        let iface = parts[2].to_string();
+                        mac_to_iface.insert(mac, iface);
+                    }
+                }
+            }
+        }
+    }
+
+    // Read global IPv6 addresses from the kernel NDP table.
+    // Format: ip6_addr dev_index state flags iface
+    let mut ip6_by_mac: HashMap<String, String> = HashMap::new();
+    if let Ok(output) = Command::new("ip").args(["-6", "neigh", "show"]).output() {
+        if output.status.success() {
+            if let Ok(s) = String::from_utf8(output.stdout) {
+                for line in s.lines() {
+                    // Example: "2001:db8::1 dev br-lan lladdr aa:bb:cc:dd:ee:ff REACHABLE"
+                    let parts: Vec<&str> = line.split_whitespace().collect();
+                    if parts.len() >= 5 {
+                        let ip6 = parts[0];
+                        // Skip link-local.
+                        if ip6.starts_with("fe80") {
+                            continue;
+                        }
+                        // lladdr is preceded by the keyword "lladdr".
+                        if let Some(pos) = parts.iter().position(|&p| p == "lladdr") {
+                            if let Some(&mac) = parts.get(pos + 1) {
+                                ip6_by_mac.insert(mac.to_lowercase(), ip6.to_string());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(merge_devices(dhcp_leases, arp_entries, wireless_macs, mac_to_iface, ip6_by_mac))
 }
 
 #[cfg(test)]
@@ -243,15 +257,21 @@ mod tests {
         let arp = parse_arp_table(
             "192.168.1.100 0x1 0x2 00:11:22:33:44:55 * br-lan\n192.168.1.150 0x1 0x2 11:22:33:44:55:66 * br-lan",
         );
-        let mut wireless = HashSet::new();
-        wireless.insert("00:11:22:33:44:55".into());
+        let mut wireless = HashMap::new();
+        wireless.insert("00:11:22:33:44:55".into(), 80);
+        let mut mac_to_iface = HashMap::new();
+        mac_to_iface.insert("aa:bb:cc:dd:ee:ff".into(), "lan1".into());
+        let mut ip6_by_mac = HashMap::new();
+        ip6_by_mac.insert("00:11:22:33:44:55".into(), "2001:db8::1".into());
 
-        let devices = merge_devices(dhcp, arp, wireless);
+        let devices = merge_devices(dhcp, arp, wireless, mac_to_iface, ip6_by_mac);
         assert_eq!(devices.len(), 3);
         assert_eq!(devices[0].mac, "00:11:22:33:44:55");
-        assert_eq!(devices[0].connection_type, "Wireless");
+        assert_eq!(devices[0].ip, Some("192.168.1.100".into()));
+        assert_eq!(devices[0].ip6, Some("2001:db8::1".into()));
+        assert_eq!(devices[0].connection, crate::domain::device::DeviceConnection::Wireless { signal_pct: 80 });
         assert_eq!(devices[1].mac, "aa:bb:cc:dd:ee:ff");
-        assert_eq!(devices[1].connection_type, "Wired");
+        assert_eq!(devices[1].connection, crate::domain::device::DeviceConnection::Wired { port_id: 1 });
         assert_eq!(devices[2].mac, "11:22:33:44:55:66");
         assert_eq!(devices[2].hostname, None);
     }

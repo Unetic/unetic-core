@@ -4,8 +4,10 @@ mod rpc;
 pub(crate) mod ports;
 
 pub(crate) mod system;
+pub mod netlink;
 pub mod wan;
 mod wireless;
+pub mod dns;
 
 pub use self::native::OpenWrtBackend;
 

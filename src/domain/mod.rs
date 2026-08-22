@@ -6,6 +6,7 @@ pub mod ports;
 pub mod system;
 pub mod wan;
 pub mod wifi;
+pub mod dns;
 
 pub use config::*;
 pub use device::*;
@@ -15,3 +16,4 @@ pub use ports::*;
 pub use system::*;
 pub use wan::*;
 pub use wifi::*;
+pub use dns::*;

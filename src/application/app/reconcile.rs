@@ -73,6 +73,16 @@ impl App {
         }
     }
 
+    pub fn sync_registered_devices(&self) -> Result<(), LegacyAppError> {
+        let (registered_devices, devices) = {
+            let inner = self.inner.lock().expect("app state poisoned");
+            let registered = inner.config.registered_devices.clone();
+            let devs = self.backend.read_devices()?;
+            (registered, devs)
+        };
+        self.backend.sync_port_forwards(&registered_devices, &devices)
+    }
+
     fn spawn_repair_task(self: &Arc<Self>, repair: Repair) {
         let app = Arc::clone(self);
         match repair {

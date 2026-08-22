@@ -263,4 +263,20 @@ impl RouterBackend for MemoryBackend {
     fn read_devices(&self) -> Result<Vec<crate::domain::device::Device>, LegacyAppError> {
         Ok(super::mock::mock_devices())
     }
+
+    fn write_static_lease(&self, _mac: &str, _ip: &str, _hostname: Option<&str>) -> Result<(), LegacyAppError> {
+        Ok(())
+    }
+    fn delete_static_lease(&self, _mac: &str) -> Result<(), LegacyAppError> {
+        Ok(())
+    }
+    fn sync_port_forwards(&self, _registered_devices: &[crate::domain::device::RegisteredDevice], _current_devices: &[crate::domain::device::Device]) -> Result<(), LegacyAppError> {
+        Ok(())
+    }
+    fn read_dns_config(&self) -> Result<crate::domain::DnsConfig, LegacyAppError> {
+        Ok(crate::domain::DnsConfig::default())
+    }
+    fn write_dns_config(&self, _cfg: &crate::domain::DnsConfig) -> Result<(), LegacyAppError> {
+        Ok(())
+    }
 }

@@ -11,6 +11,10 @@ pub struct DesiredConfig {
     pub wifi: WifiDesired,
     #[serde(default)]
     pub wan: WanDesired,
+    #[serde(default)]
+    pub registered_devices: Vec<crate::domain::device::RegisteredDevice>,
+    #[serde(default)]
+    pub dns: crate::domain::DnsConfig,
 }
 
 impl DesiredConfig {
@@ -21,6 +25,8 @@ impl DesiredConfig {
             revision: 1,
             wifi: WifiDesired { primary },
             wan,
+            registered_devices: Vec::new(),
+            dns: crate::domain::DnsConfig::default(),
         }
     }
 
@@ -31,6 +37,8 @@ impl DesiredConfig {
             revision: 0,
             wifi: WifiDesired::default(),
             wan: WanDesired::default(),
+            registered_devices: Vec::new(),
+            dns: crate::domain::DnsConfig::default(),
         }
     }
 }

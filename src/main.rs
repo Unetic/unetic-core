@@ -6,7 +6,7 @@ use std::{
 };
 
 use anyhow::{Context, Result};
-use tracing::{info, warn};
+use tracing::warn;
 use tracing_subscriber::EnvFilter;
 use unetic_core::{
     App, MemoryBackend, RouterBackend, StateStore, presentation::server::run_event_loop, infrastructure::openwrt::OpenWrtBackend,
@@ -42,6 +42,10 @@ async fn main() -> Result<()> {
     let (event_tx, event_rx) = mpsc::channel();
     let app = App::bootstrap(backend, StateStore::new(state_dir), event_tx);
     app.start_background();
+
+    if !is_memory {
+        unetic_core::infrastructure::openwrt::netlink::start_neighbor_listener(Arc::clone(&app));
+    }
 
     run_event_loop(app, event_rx, is_memory).await
 }

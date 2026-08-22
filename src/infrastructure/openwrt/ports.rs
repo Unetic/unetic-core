@@ -22,13 +22,15 @@ pub(crate) fn ports_list(devices: &[Device]) -> Vec<PhysicalPort> {
 
     let mut mac_to_iface: HashMap<String, String> = HashMap::new();
     if let Ok(output) = Command::new("bridge").args(["fdb", "show"]).output() {
-        if let Ok(fdb_str) = String::from_utf8(output.stdout) {
-            for line in fdb_str.lines() {
-                let parts: Vec<&str> = line.split_whitespace().collect();
-                if parts.len() >= 3 && parts[1] == "dev" {
-                    let mac = parts[0].to_lowercase();
-                    let iface = parts[2].to_string();
-                    mac_to_iface.insert(mac, iface);
+        if output.status.success() {
+            if let Ok(fdb_str) = String::from_utf8(output.stdout) {
+                for line in fdb_str.lines() {
+                    let parts: Vec<&str> = line.split_whitespace().collect();
+                    if parts.len() >= 3 && parts[1] == "dev" {
+                        let mac = parts[0].to_lowercase();
+                        let iface = parts[2].to_string();
+                        mac_to_iface.insert(mac, iface);
+                    }
                 }
             }
         }
@@ -40,7 +42,7 @@ pub(crate) fn ports_list(devices: &[Device]) -> Vec<PhysicalPort> {
         if let Some(iface) = mac_to_iface.get(&mac) {
             let conn = PortConnection {
                 mac,
-                ip: Some(device.ip.clone()),
+                ip: device.ip.clone(),
                 hostname: device.hostname.clone(),
             };
             iface_to_connections

@@ -82,7 +82,7 @@ impl App {
             &operation_id[..operation_id.len().min(24)]
         );
 
-        if let Err(spawn_error) = thread::Builder::new()
+        if let Err(_spawn_error) = thread::Builder::new()
             .name(thread_name)
             .spawn(move || crate::application::transaction::run_change(app, worker_context))
         {

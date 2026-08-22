@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, path::Path};
+use std::collections::BTreeMap;
 
 use serde_json::json;
 
@@ -189,5 +189,21 @@ impl RouterBackend for OpenWrtBackend {
 
     fn read_devices(&self) -> Result<Vec<crate::domain::device::Device>, LegacyAppError> {
         devices::read_devices()
+    }
+
+    fn write_static_lease(&self, _mac: &str, _ip: &str, _hostname: Option<&str>) -> Result<(), LegacyAppError> {
+        Ok(())
+    }
+    fn delete_static_lease(&self, _mac: &str) -> Result<(), LegacyAppError> {
+        Ok(())
+    }
+    fn sync_port_forwards(&self, _registered_devices: &[crate::domain::device::RegisteredDevice], _current_devices: &[crate::domain::device::Device]) -> Result<(), LegacyAppError> {
+        Ok(())
+    }
+    fn read_dns_config(&self) -> Result<crate::domain::DnsConfig, LegacyAppError> {
+        Ok(super::dns::read_dns_config())
+    }
+    fn write_dns_config(&self, cfg: &crate::domain::DnsConfig) -> Result<(), LegacyAppError> {
+        super::dns::write_dns_config(cfg)
     }
 }

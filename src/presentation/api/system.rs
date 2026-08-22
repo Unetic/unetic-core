@@ -7,7 +7,6 @@ pub fn dispatch(app: &Arc<App>, method: &str, request: Value) -> Result<Value, u
     match method {
 
         "system.info" => Ok(json!(app.system_info())),
-        "devices.list" => app.devices_list().map(|devices| json!(devices)).map_err(|_| 1),
         "operation.get" => Ok(app.last_or_active_operation()),
         "health.get" => Ok(json!(app.health())),
         "tools.ping" => serde_json::from_value::<PingRequest>(request)
@@ -41,8 +40,8 @@ mod tests {
                 .expect("valid devices array");
         assert_eq!(devices.len(), 3);
         assert_eq!(devices[0].mac, "00:11:22:33:44:55");
-        assert_eq!(devices[0].connection_type, "Wireless");
+        assert_eq!(devices[0].connection, crate::domain::device::DeviceConnection::Wireless { signal_pct: 82 });
         assert_eq!(devices[1].mac, "66:77:88:99:aa:bb");
-        assert_eq!(devices[1].connection_type, "Wired");
+        assert_eq!(devices[1].connection, crate::domain::device::DeviceConnection::Wired { port_id: 1 });
     }
 }

@@ -100,4 +100,6 @@ pub struct PublicState {
     pub last_system_error: Option<crate::domain::errors::LegacyAppError>,
     pub drift: DriftState,
     pub health: HealthState,
+    pub registered_devices: Vec<crate::domain::device::RegisteredDevice>,
+    pub dns: crate::domain::DnsConfig,
 }

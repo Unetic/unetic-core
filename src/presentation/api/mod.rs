@@ -1,6 +1,6 @@
 use std::sync::Arc;
 use serde::Serialize;
-use serde_json::{Value, json};
+use serde_json::Value;
 
 use crate::application::app::App;
 
@@ -11,6 +11,8 @@ pub mod subscribe;
 pub mod system;
 pub mod wan;
 pub mod wifi;
+pub mod devices;
+pub mod dns;
 
 #[derive(Serialize)]
 pub struct ApiEnvelope<T> {
@@ -57,6 +59,10 @@ pub fn dispatch(app: &Arc<App>, method: &str, request_json: &str) -> String {
         ports::dispatch(app, method, request)
     } else if method.starts_with("maintenance.") {
         maintenance::dispatch(app, method, request)
+    } else if method.starts_with("devices.") {
+        devices::dispatch(app, method, request)
+    } else if method.starts_with("dns.") {
+        dns::dispatch(app, method, request)
     } else {
         system::dispatch(app, method, request)
     };
