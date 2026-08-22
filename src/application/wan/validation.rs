@@ -64,6 +64,54 @@ pub fn validate_wan_desired(desired: &WanDesired) -> Result<(), LegacyAppError> 
         validate_ipv4(dns, "custom DNS")?;
     }
 
+    if let Some(qos) = &desired.qos {
+        validate_qos(qos, desired.proto)?;
+    }
+
+    Ok(())
+}
+
+fn validate_qos(qos: &crate::domain::WanQos, proto: WanProtocol) -> Result<(), LegacyAppError> {
+    if !qos.enabled {
+        return Ok(());
+    }
+
+    if proto == WanProtocol::Extender {
+        return Err(LegacyAppError::new(
+            ErrorCode::InvalidArgument,
+            ErrorStage::Validate,
+            "QoS cannot be enabled on WAN in extender mode (master only)",
+        ));
+    }
+
+    if qos.download_kbps.is_none() && qos.upload_kbps.is_none() {
+        return Err(LegacyAppError::new(
+            ErrorCode::InvalidArgument,
+            ErrorStage::Validate,
+            "At least one bandwidth limit (download or upload) must be specified when QoS is enabled",
+        ));
+    }
+
+    if let Some(download) = qos.download_kbps {
+        if download == 0 || download > 10_000_000 {
+            return Err(LegacyAppError::new(
+                ErrorCode::InvalidArgument,
+                ErrorStage::Validate,
+                "QoS download bandwidth limit must be between 1 and 10000000 kbps",
+            ));
+        }
+    }
+
+    if let Some(upload) = qos.upload_kbps {
+        if upload == 0 || upload > 10_000_000 {
+            return Err(LegacyAppError::new(
+                ErrorCode::InvalidArgument,
+                ErrorStage::Validate,
+                "QoS upload bandwidth limit must be between 1 and 10000000 kbps",
+            ));
+        }
+    }
+
     Ok(())
 }
 
@@ -230,5 +278,48 @@ mod tests {
             ..Default::default()
         };
         assert!(validate_wan_desired(&desired_err).is_err());
+    }
+
+    #[test]
+    fn test_validate_qos_master_allowed_extender_rejected() {
+        use crate::domain::WanQos;
+
+        let master_qos = WanDesired {
+            present: true,
+            proto: WanProtocol::Dhcp,
+            qos: Some(WanQos {
+                enabled: true,
+                download_kbps: Some(100_000),
+                upload_kbps: Some(20_000),
+            }),
+            ..Default::default()
+        };
+        assert!(validate_wan_desired(&master_qos).is_ok());
+
+        let extender_qos = WanDesired {
+            present: true,
+            proto: WanProtocol::Extender,
+            qos: Some(WanQos {
+                enabled: true,
+                download_kbps: Some(100_000),
+                upload_kbps: Some(20_000),
+            }),
+            ..Default::default()
+        };
+        let err = validate_wan_desired(&extender_qos).unwrap_err();
+        assert_eq!(err.code, ErrorCode::InvalidArgument);
+        assert!(err.message.contains("master only"));
+
+        let invalid_bw = WanDesired {
+            present: true,
+            proto: WanProtocol::Dhcp,
+            qos: Some(WanQos {
+                enabled: true,
+                download_kbps: Some(0),
+                upload_kbps: None,
+            }),
+            ..Default::default()
+        };
+        assert!(validate_wan_desired(&invalid_bw).is_err());
     }
 }

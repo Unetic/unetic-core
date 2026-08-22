@@ -16,6 +16,7 @@ impl MemoryBackend {
             custom_dns: state.wan_committed.custom_dns.clone(),
             static_config: state.wan_committed.static_config.clone(),
             pppoe_config: state.wan_committed.pppoe_config.clone(),
+            qos: state.wan_committed.qos.clone(),
         })
     }
 

@@ -99,6 +99,7 @@ pub fn parse_discovered_wan(value: &Value) -> DiscoveredWan {
         custom_dns,
         static_config,
         pppoe_config,
+        qos: None,
     }
 }
 
@@ -225,6 +226,7 @@ pub fn parse_wan_runtime_status(value: &Value) -> WanPublicState {
         mac_address: None,
         uptime_secs: uptime,
         error_reason: None,
+        qos: None,
     }
 }
 

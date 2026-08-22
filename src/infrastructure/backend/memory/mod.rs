@@ -96,6 +96,7 @@ impl MemoryBackend {
             mac_address: Some("00:11:22:33:44:55".into()),
             uptime_secs: 1200,
             error_reason: None,
+            qos: wan.qos.clone(),
         };
         Self {
             state: Mutex::new(MemoryState {

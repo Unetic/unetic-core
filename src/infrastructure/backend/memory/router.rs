@@ -181,10 +181,12 @@ impl RouterBackend for MemoryBackend {
             state.wan_runtime.present = true;
             state.wan_runtime.proto = wan_staged.proto;
             state.wan_runtime.status = WanStatus::Connected;
+            state.wan_runtime.qos = wan_staged.qos.clone();
         } else {
             state.wan_runtime.present = false;
             state.wan_runtime.proto = WanProtocol::None;
             state.wan_runtime.status = WanStatus::NotConfigured;
+            state.wan_runtime.qos = None;
         }
         state.wan_committed = wan_staged;
         Ok(())
@@ -222,10 +224,12 @@ impl RouterBackend for MemoryBackend {
                 state.wan_runtime.present = true;
                 state.wan_runtime.proto = wan_snapshot.proto;
                 state.wan_runtime.status = WanStatus::Connected;
+                state.wan_runtime.qos = wan_snapshot.qos.clone();
             } else {
                 state.wan_runtime.present = false;
                 state.wan_runtime.proto = WanProtocol::None;
                 state.wan_runtime.status = WanStatus::NotConfigured;
+                state.wan_runtime.qos = None;
             }
             state.wan_committed = wan_snapshot.clone();
             state.wan_sessions.insert(session.to_owned(), wan_snapshot);

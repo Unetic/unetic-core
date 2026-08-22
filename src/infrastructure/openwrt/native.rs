@@ -49,23 +49,27 @@ impl RouterBackend for OpenWrtBackend {
     }
 
     fn discover_primary_wan(&self) -> Result<DiscoveredWan, LegacyAppError> {
-        match rpc::uci_get_config("network", Some("wan"), None, None) {
-            Ok(res) => Ok(wan::parse_discovered_wan(&res)),
-            Err(error) if error.code == ErrorCode::UciReadFailed => Ok(DiscoveredWan {
+        let mut wan = match rpc::uci_get_config("network", Some("wan"), None, None) {
+            Ok(res) => wan::parse_discovered_wan(&res),
+            Err(error) if error.code == ErrorCode::UciReadFailed => DiscoveredWan {
                 present: false,
                 proto: crate::domain::WanProtocol::None,
                 ..DiscoveredWan::default()
-            }),
-            Err(error) => Err(error),
-        }
+            },
+            Err(error) => return Err(error),
+        };
+        wan.qos = super::qos::read_sqm_config();
+        Ok(wan)
     }
 
     fn read_wan_config(&self, session: Option<&str>) -> Result<WanDesired, LegacyAppError> {
-        match rpc::uci_get_config("network", Some("wan"), None, session) {
-            Ok(res) => Ok(wan::parse_discovered_wan(&res).to_desired()),
-            Err(error) if error.code == ErrorCode::UciReadFailed => Ok(WanDesired::default()),
-            Err(error) => Err(error),
-        }
+        let mut wan = match rpc::uci_get_config("network", Some("wan"), None, session) {
+            Ok(res) => wan::parse_discovered_wan(&res).to_desired(),
+            Err(error) if error.code == ErrorCode::UciReadFailed => WanDesired::default(),
+            Err(error) => return Err(error),
+        };
+        wan.qos = super::qos::read_sqm_config();
+        Ok(wan)
     }
 
     fn stage_wan_config(&self, session: &str, config: &WanDesired) -> Result<(), LegacyAppError> {
@@ -84,12 +88,20 @@ impl RouterBackend for OpenWrtBackend {
         .map_err(|error| {
             LegacyAppError::new(ErrorCode::UciStageFailed, ErrorStage::Stage, error.message)
                 .retryable(error.retryable)
-        })
+        })?;
+
+        if config.proto != crate::domain::WanProtocol::Extender {
+            super::qos::write_sqm_config(config.device.as_deref(), &config.qos)?;
+        } else {
+            super::qos::write_sqm_config(None, &None)?;
+        }
+
+        Ok(())
     }
 
     fn read_wan_runtime_status(&self) -> Result<WanPublicState, LegacyAppError> {
-        let response = match rpc::call_ubus("network.interface.wan", "status", json!({})) {
-            Ok(res) => res,
+        let mut status = match rpc::call_ubus("network.interface.wan", "status", json!({})) {
+            Ok(res) => wan::parse_wan_runtime_status(&res),
             Err(_) => {
                 return Ok(WanPublicState {
                     present: false,
@@ -99,7 +111,8 @@ impl RouterBackend for OpenWrtBackend {
                 });
             }
         };
-        Ok(wan::parse_wan_runtime_status(&response))
+        status.qos = super::qos::read_sqm_config();
+        Ok(status)
     }
 
     fn revert_staged(&self, session: &str) -> Result<(), LegacyAppError> {

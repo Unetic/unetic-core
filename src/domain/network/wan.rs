@@ -41,6 +41,15 @@ pub struct WanPppoeConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct WanQos {
+    pub enabled: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub download_kbps: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub upload_kbps: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct WanDesired {
     pub present: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -56,6 +65,8 @@ pub struct WanDesired {
     pub static_config: Option<WanStaticConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pppoe_config: Option<WanPppoeConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub qos: Option<WanQos>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -68,6 +79,7 @@ pub struct DiscoveredWan {
     pub custom_dns: Vec<String>,
     pub static_config: Option<WanStaticConfig>,
     pub pppoe_config: Option<WanPppoeConfig>,
+    pub qos: Option<WanQos>,
 }
 
 impl DiscoveredWan {
@@ -82,6 +94,7 @@ impl DiscoveredWan {
             custom_dns: self.custom_dns.clone(),
             static_config: self.static_config.clone(),
             pppoe_config: self.pppoe_config.clone(),
+            qos: self.qos.clone(),
         }
     }
 }
@@ -106,6 +119,8 @@ pub struct WanPublicState {
     pub uptime_secs: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error_reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub qos: Option<WanQos>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

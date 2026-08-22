@@ -210,3 +210,66 @@ fn test_api_dispatch_wan_set_extender() {
     let state = app.state();
     assert_eq!(state.revision, 2);
 }
+
+#[test]
+fn test_api_dispatch_wan_set_qos_master_success() {
+    let app = test_app();
+    let payload = serde_json::json!({
+        "idempotence_token": "xyz",
+        "request_id": "req-qos-1",
+        "expected_revision": 1,
+        "wan": {
+            "present": true,
+            "proto": "dhcp",
+            "qos": {
+                "enabled": true,
+                "download_kbps": 100000,
+                "upload_kbps": 20000
+            }
+        }
+    })
+    .to_string();
+
+    let response = api::dispatch(&app, "wan.set", &payload);
+    let val: serde_json::Value = serde_json::from_str(&response).expect("valid json response");
+    assert_eq!(
+        val.get("error").and_then(serde_json::Value::as_u64),
+        Some(0)
+    );
+
+    wait_for_idle(&app);
+    let state = app.state();
+    assert_eq!(state.revision, 2);
+    assert_eq!(state.wan.qos, Some(unetic_core::domain::WanQos {
+        enabled: true,
+        download_kbps: Some(100000),
+        upload_kbps: Some(20000),
+    }));
+}
+
+#[test]
+fn test_api_dispatch_wan_set_qos_extender_rejected() {
+    let app = test_app();
+    let payload = serde_json::json!({
+        "idempotence_token": "xyz",
+        "request_id": "req-qos-2",
+        "expected_revision": 1,
+        "wan": {
+            "present": true,
+            "proto": "extender",
+            "qos": {
+                "enabled": true,
+                "download_kbps": 100000,
+                "upload_kbps": 20000
+            }
+        }
+    })
+    .to_string();
+
+    let response = api::dispatch(&app, "wan.set", &payload);
+    let val: serde_json::Value = serde_json::from_str(&response).expect("valid json response");
+    assert_ne!(
+        val.get("error").and_then(serde_json::Value::as_u64),
+        Some(0)
+    );
+}
