@@ -7,7 +7,7 @@ use std::{
 use serde::{Serialize, de::DeserializeOwned};
 
 use crate::{
-    domain::errors::{LegacyAppError, ErrorCode, ErrorStage},
+    domain::errors::{ErrorCode, ErrorStage, LegacyAppError},
     domain::{DesiredConfig, TransactionJournal},
 };
 

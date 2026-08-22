@@ -9,3 +9,6 @@ pub const DUCKDNS_API_URL_PREFIX: &str = "https://www.duckdns.org/update";
 pub const MESH_EXTENDER_RETRY_SECS: u64 = 3;
 pub const MESH_EXTENDER_TELEMETRY_SECS: u64 = 10;
 pub const TRAFFIC_SAMPLING_INTERVAL_SECS: u64 = 1;
+pub const HTTP_TIMEOUT_SECS: u64 = 15;
+pub const PING_COUNT: &str = "4";
+pub const PING_TIMEOUT_SECS: &str = "2";

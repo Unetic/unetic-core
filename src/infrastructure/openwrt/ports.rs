@@ -17,7 +17,7 @@ fn parse_speed(speed_str: &str) -> PortSpeed {
     }
 }
 
-pub(crate) fn ports_list(devices: &[Device]) -> Vec<PhysicalPort> {
+pub(crate) fn ports_list(devices: &[Device], wan_interface: Option<&str>) -> Vec<PhysicalPort> {
     let mut ports = Vec::new();
 
     let mut mac_to_iface: HashMap<String, String> = HashMap::new();
@@ -67,7 +67,8 @@ pub(crate) fn ports_list(devices: &[Device]) -> Vec<PhysicalPort> {
         let mut speed = PortSpeed::NoLink;
         if let Ok(operstate) = fs::read_to_string(format!("/sys/class/net/{}/operstate", iface)) {
             if operstate.trim() == "up" {
-                if let Ok(speed_str) = fs::read_to_string(format!("/sys/class/net/{}/speed", iface)) {
+                if let Ok(speed_str) = fs::read_to_string(format!("/sys/class/net/{}/speed", iface))
+                {
                     speed = parse_speed(&speed_str);
                 }
             }
@@ -82,14 +83,11 @@ pub(crate) fn ports_list(devices: &[Device]) -> Vec<PhysicalPort> {
         });
     }
 
-    let possible_wan = vec!["eth0", "wan"];
-    let mut wan_iface = None;
-    for w in possible_wan {
-        if fs::metadata(format!("/sys/class/net/{}", w)).is_ok() {
-            wan_iface = Some(w.to_string());
-            break;
-        }
-    }
+    let wan_iface = wan_interface
+        .filter(|interface| fs::metadata(format!("/sys/class/net/{interface}")).is_ok())
+        .map(str::to_owned)
+        .or_else(|| existing_interface("wan"))
+        .or_else(|| existing_interface("eth0"));
 
     if let Some(wan) = wan_iface {
         let mut speed = PortSpeed::NoLink;
@@ -111,4 +109,10 @@ pub(crate) fn ports_list(devices: &[Device]) -> Vec<PhysicalPort> {
     }
 
     ports
+}
+
+fn existing_interface(interface: &str) -> Option<String> {
+    fs::metadata(format!("/sys/class/net/{interface}"))
+        .is_ok()
+        .then(|| interface.to_owned())
 }

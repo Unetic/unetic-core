@@ -1,7 +1,7 @@
 use std::net::Ipv4Addr;
 
 use crate::{
-    domain::errors::{LegacyAppError, ErrorCode, ErrorStage},
+    domain::errors::{ErrorCode, ErrorStage, LegacyAppError},
     domain::{SetWanRequest, WanDesired, WanProtocol},
 };
 

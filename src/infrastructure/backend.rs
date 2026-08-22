@@ -39,15 +39,25 @@ pub trait RouterBackend: Send + Sync {
     fn read_devices(
         &self,
         extenders: &[crate::domain::extender::KnownExtender],
-        extender_clients: &std::collections::HashMap<String, Vec<crate::domain::extender::ExtenderClient>>
+        extender_clients: &std::collections::HashMap<
+            String,
+            Vec<crate::domain::extender::ExtenderClient>,
+        >,
     ) -> Result<Vec<crate::domain::device::Device>, LegacyAppError>;
-    fn write_static_lease(&self, mac: &str, ip: &str, hostname: Option<&str>) -> Result<(), LegacyAppError>;
+    fn write_static_lease(
+        &self,
+        mac: &str,
+        ip: &str,
+        hostname: Option<&str>,
+    ) -> Result<(), LegacyAppError>;
     fn delete_static_lease(&self, mac: &str) -> Result<(), LegacyAppError>;
-    fn sync_port_forwards(&self, registered_devices: &[crate::domain::device::RegisteredDevice], current_devices: &[crate::domain::device::Device]) -> Result<(), LegacyAppError>;
+    fn sync_port_forwards(
+        &self,
+        registered_devices: &[crate::domain::device::RegisteredDevice],
+        current_devices: &[crate::domain::device::Device],
+    ) -> Result<(), LegacyAppError>;
     fn read_dns_config(&self) -> Result<crate::domain::DnsConfig, LegacyAppError>;
     fn write_dns_config(&self, cfg: &crate::domain::DnsConfig) -> Result<(), LegacyAppError>;
-    fn write_ddns_config(&self, cfg: &crate::domain::DdnsConfig) -> Result<(), LegacyAppError>;
-
     fn read_ssids(
         &self,
         targets: &[String],

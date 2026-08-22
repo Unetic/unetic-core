@@ -1,6 +1,9 @@
-use serde_json::{json, Value};
-use crate::domain::{wifi::WifiNetworkConfig, errors::{LegacyAppError, ErrorCode, ErrorStage}};
+use crate::domain::{
+    errors::{ErrorCode, ErrorStage, LegacyAppError},
+    wifi::WifiNetworkConfig,
+};
 use crate::infrastructure::openwrt::rpc::call_ubus;
+use serde_json::{Value, json};
 
 pub fn stage_wifi_config(
     session: &str,
@@ -12,7 +15,7 @@ pub fn stage_wifi_config(
         let mut values = serde_json::Map::new();
         values.insert("ssid".into(), json!(config.ssid));
         values.insert("encryption".into(), json!(config.encryption));
-        
+
         // Inject 802.11r/k/v options
         values.insert("ieee80211k".into(), json!("1"));
         values.insert("ieee80211v".into(), json!("1"));
@@ -21,8 +24,14 @@ pub fn stage_wifi_config(
         values.insert("ieee80211r".into(), json!("1"));
         values.insert("ft_over_ds".into(), json!("1"));
         values.insert("ft_psk_generate_local".into(), json!("1"));
-        
-        let md = format!("{:04x}", config.ssid.bytes().fold(0u16, |acc, b| acc.wrapping_add(b as u16)));
+
+        let md = format!(
+            "{:04x}",
+            config
+                .ssid
+                .bytes()
+                .fold(0u16, |acc, b| acc.wrapping_add(b as u16))
+        );
         values.insert("mobility_domain".into(), json!(md));
 
         if config.encryption != "none"
@@ -85,7 +94,7 @@ pub fn stage_wifi_config(
                 "ubus_rpc_session": session
             }),
         );
-        
+
         if update_res.is_err() {
             call_ubus(
                 "uci",
@@ -105,7 +114,7 @@ pub fn stage_wifi_config(
             })?;
         }
 
-        let _ = crate::infrastructure::openwrt::network::enable_stp();
+        crate::infrastructure::openwrt::network::stage_stp(session)?;
     }
 
     Ok(())

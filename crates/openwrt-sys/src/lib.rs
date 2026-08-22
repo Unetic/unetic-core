@@ -169,10 +169,8 @@ pub struct Server {
 }
 
 // Server holds a C pointer to the ubus context. The OpenWrt C shim
-// guarantees that uloop/ubus polling is safe to move between threads 
-// as long as it is only polled by one thread at a time.
+// guarantees that moving it is safe as long as only its owner polls it.
 unsafe impl Send for Server {}
-unsafe impl Sync for Server {}
 
 impl Server {
     pub fn poll(&mut self, timeout_ms: i32) -> Result<(), BridgeError> {

@@ -2,6 +2,13 @@ use std::fs;
 
 use crate::domain::system::SystemInfo;
 
+pub fn local_device_id() -> Option<String> {
+    std::env::var("UNETIC_DEVICE_ID")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| read_trimmed("/sys/class/net/br-lan/address"))
+}
+
 pub fn read_system_info() -> SystemInfo {
     SystemInfo {
         hostname: read_trimmed("/proc/sys/kernel/hostname").unwrap_or_default(),

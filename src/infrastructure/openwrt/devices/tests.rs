@@ -33,14 +33,31 @@ fn test_merge_and_sort() {
 
     let extenders: Vec<crate::domain::extender::KnownExtender> = Vec::new();
     let extender_clients = HashMap::new();
-    let devices = merge_devices(dhcp, arp, wireless, mac_to_iface, ip6_by_mac, &extenders, &extender_clients);
+    let devices = merge_devices(
+        dhcp,
+        arp,
+        wireless,
+        mac_to_iface,
+        ip6_by_mac,
+        &extenders,
+        &extender_clients,
+    );
     assert_eq!(devices.len(), 3);
     assert_eq!(devices[0].mac, "00:11:22:33:44:55");
     assert_eq!(devices[0].ip, Some("192.168.1.100".into()));
     assert_eq!(devices[0].ip6, Some("2001:db8::1".into()));
-    assert_eq!(devices[0].connection, crate::domain::device::DeviceConnection::Wireless { signal_dbm: -60, distance_m: 10.0 });
+    assert_eq!(
+        devices[0].connection,
+        crate::domain::device::DeviceConnection::Wireless {
+            signal_dbm: -60,
+            distance_m: 10.0
+        }
+    );
     assert_eq!(devices[1].mac, "aa:bb:cc:dd:ee:ff");
-    assert_eq!(devices[1].connection, crate::domain::device::DeviceConnection::Wired { port_id: 1 });
+    assert_eq!(
+        devices[1].connection,
+        crate::domain::device::DeviceConnection::Wired { port_id: 1 }
+    );
     assert_eq!(devices[2].mac, "11:22:33:44:55:66");
     assert_eq!(devices[2].hostname, None);
 }

@@ -109,7 +109,7 @@ pub struct PublicState {
     #[serde(default)]
     pub ddns_status: crate::domain::DdnsStatus,
     #[serde(default)]
-    pub extenders: Vec<crate::domain::extender::KnownExtender>,
+    pub extenders: Vec<crate::domain::extender::PublicExtender>,
     #[serde(default)]
     pub extender_ports: std::collections::HashMap<String, Vec<crate::domain::ports::PhysicalPort>>,
     #[serde(default)]
@@ -117,7 +117,9 @@ pub struct PublicState {
     #[serde(default)]
     pub extender_pairing_status: String,
     #[serde(default)]
-    pub extender_clients: std::collections::HashMap<String, Vec<crate::domain::extender::ExtenderClient>>,
+    pub extender_clients:
+        std::collections::HashMap<String, Vec<crate::domain::extender::ExtenderClient>>,
     #[serde(default)]
-    pub latest_scans: std::collections::HashMap<String, Vec<crate::domain::extender::ScannedNetwork>>,
+    pub latest_scans:
+        std::collections::HashMap<String, Vec<crate::domain::extender::ScannedNetwork>>,
 }

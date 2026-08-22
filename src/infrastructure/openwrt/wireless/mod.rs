@@ -1,11 +1,9 @@
 use serde_json::Value;
 use std::collections::BTreeMap;
 
-
-
 use super::rpc::uci_get_config;
 use crate::{
-    domain::errors::{LegacyAppError, ErrorCode, ErrorStage},
+    domain::errors::{ErrorCode, ErrorStage, LegacyAppError},
     domain::{DiscoveredWifi, WifiNetworkConfig},
 };
 

@@ -4,9 +4,13 @@ use serde_json::json;
 
 use super::{App, Inner};
 use crate::{
+    application::state::now_ms,
     application::wan::WanChangeContext,
-    domain::errors::{LegacyAppError, ErrorCode, ErrorStage},
-    domain::{Lifecycle, OperationAccepted, OperationSource, OperationStatus, SetWanRequest},
+    domain::errors::{ErrorCode, ErrorStage, LegacyAppError},
+    domain::{
+        LastOperation, Lifecycle, OperationAccepted, OperationIntent, OperationSource,
+        OperationStatus, SetWanRequest,
+    },
 };
 
 impl App {
@@ -20,7 +24,7 @@ impl App {
             let mut inner = self.inner.lock().expect("app state poisoned");
             check_wan_app_ready(&inner)?;
 
-            if let Some(accepted) = check_wan_idempotency(&inner, &request.request_id)? {
+            if let Some(accepted) = check_wan_idempotency(&inner, &request)? {
                 return Ok(accepted);
             }
 
@@ -32,6 +36,11 @@ impl App {
                     status: OperationStatus::Succeeded,
                     noop: true,
                 };
+                inner.last_user_operation = Some(noop_last_operation(
+                    &accepted,
+                    inner.config.revision,
+                    &request,
+                ));
                 (None, Some(accepted))
             } else {
                 let context = build_wan_change_context(&inner, self.next_operation_id(), &request);
@@ -41,6 +50,7 @@ impl App {
         };
 
         if let Some(accepted) = noop_result {
+            self.publish();
             return Ok(accepted);
         }
 
@@ -118,10 +128,14 @@ fn check_wan_app_ready(inner: &Inner) -> Result<(), LegacyAppError> {
 
 fn check_wan_idempotency(
     inner: &Inner,
-    request_id: &str,
+    request: &SetWanRequest,
 ) -> Result<Option<OperationAccepted>, LegacyAppError> {
+    let intent = OperationIntent::Wan(request.wan.clone());
     if let Some(active) = &inner.active_operation {
-        if active.request_id.as_deref() == Some(request_id) {
+        if active.request_id.as_deref() == Some(request.request_id.as_str()) {
+            if active.intent.as_ref() != Some(&intent) {
+                return Err(idempotency_conflict());
+            }
             return Ok(Some(OperationAccepted {
                 operation_id: active.id.clone(),
                 status: active.status,
@@ -136,8 +150,11 @@ fn check_wan_idempotency(
     }
 
     if let Some(last) = &inner.last_user_operation
-        && last.request_id.as_deref() == Some(request_id)
+        && last.request_id.as_deref() == Some(request.request_id.as_str())
     {
+        if last.intent.as_ref() != Some(&intent) {
+            return Err(idempotency_conflict());
+        }
         return Ok(Some(OperationAccepted {
             operation_id: last.id.clone(),
             status: last.status,
@@ -146,6 +163,33 @@ fn check_wan_idempotency(
     }
 
     Ok(None)
+}
+
+fn noop_last_operation(
+    accepted: &OperationAccepted,
+    revision: u64,
+    request: &SetWanRequest,
+) -> LastOperation {
+    LastOperation {
+        id: accepted.operation_id.clone(),
+        request_id: Some(request.request_id.clone()),
+        source: OperationSource::User,
+        kind: "wan.set_config".to_owned(),
+        status: OperationStatus::Succeeded,
+        revision,
+        requested_ssid: String::new(),
+        intent: Some(OperationIntent::Wan(request.wan.clone())),
+        error: None,
+        finished_at_ms: now_ms(),
+    }
+}
+
+fn idempotency_conflict() -> LegacyAppError {
+    LegacyAppError::new(
+        ErrorCode::IdempotencyConflict,
+        ErrorStage::Validate,
+        "request_id was already used for a different WAN configuration",
+    )
 }
 
 fn check_wan_revision(current_revision: u64, expected_revision: u64) -> Result<(), LegacyAppError> {

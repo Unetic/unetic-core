@@ -3,7 +3,7 @@ use std::{sync::Arc, thread};
 use serde_json::json;
 
 use super::{App, Inner};
-use crate::application::state::validate_wifi_config;
+use crate::application::state::{now_ms, validate_wifi_config};
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub enum WifiSetError {
@@ -15,10 +15,10 @@ pub enum WifiSetError {
 
 use crate::{
     application::transaction::ChangeContext,
-    domain::errors::{LegacyAppError, ErrorCode, ErrorStage},
+    domain::errors::{ErrorCode, ErrorStage, LegacyAppError},
     domain::{
-        Lifecycle, OperationAccepted, OperationSource, OperationStatus, SetWifiConfigRequest,
-        WifiNetworkConfig,
+        LastOperation, Lifecycle, OperationAccepted, OperationIntent, OperationSource,
+        OperationStatus, SetWifiConfigRequest, WifiNetworkConfig,
     },
 };
 
@@ -34,7 +34,7 @@ impl App {
             let mut inner = self.inner.lock().expect("app state poisoned");
             check_app_ready(&inner)?;
 
-            if let Some(accepted) = check_idempotency(&inner, &request.request_id, &request.ssid)? {
+            if let Some(accepted) = check_idempotency(&inner, &request)? {
                 return Ok(accepted);
             }
 
@@ -46,6 +46,11 @@ impl App {
                     status: OperationStatus::Succeeded,
                     noop: true,
                 };
+                inner.last_user_operation = Some(noop_last_operation(
+                    &accepted,
+                    inner.config.revision,
+                    &request,
+                ));
                 (None, Some(accepted))
             } else {
                 let context = build_wifi_change_context(&inner, self.next_operation_id(), &request);
@@ -55,11 +60,13 @@ impl App {
         };
 
         if let Some(accepted) = noop_result {
+            self.publish();
             return Ok(accepted);
         }
 
         let context = context.expect("context must be present if not noop");
-        self.persist_and_spawn_wifi_change(context).map_err(|_| WifiSetError::ApplyFailed)
+        self.persist_and_spawn_wifi_change(context)
+            .map_err(|_| WifiSetError::ApplyFailed)
     }
 
     fn persist_and_spawn_wifi_change(
@@ -70,7 +77,9 @@ impl App {
         if let Err(error) = self.store.persist_transaction(&journal) {
             let mut inner = self.inner.lock().expect("app state poisoned");
             inner.active_operation = None;
-            return Err(error.with_operation(&context.operation_id, context.request_id.as_deref()).into());
+            return Err(error
+                .with_operation(&context.operation_id, context.request_id.as_deref())
+                .into());
         }
         self.publish();
 
@@ -87,7 +96,15 @@ impl App {
             .spawn(move || crate::application::transaction::run_change(app, worker_context))
         {
             let error = WifiSetError::ApplyFailed;
-            self.complete_failure(&context, crate::domain::errors::LegacyAppError::new(crate::domain::errors::ErrorCode::Internal, crate::domain::errors::ErrorStage::Apply, "ApplyFailed"), false);
+            self.complete_failure(
+                &context,
+                crate::domain::errors::LegacyAppError::new(
+                    crate::domain::errors::ErrorCode::Internal,
+                    crate::domain::errors::ErrorStage::Apply,
+                    "ApplyFailed",
+                ),
+                false,
+            );
             return Err(error);
         }
 
@@ -144,13 +161,13 @@ fn check_app_ready(inner: &Inner) -> Result<(), LegacyAppError> {
 
 fn check_idempotency(
     inner: &Inner,
-    request_id: &str,
-    requested_ssid: &str,
+    request: &SetWifiConfigRequest,
 ) -> Result<Option<OperationAccepted>, LegacyAppError> {
+    let intent = wifi_intent(request);
     if let Some(active) = &inner.active_operation {
-        if active.request_id.as_deref() == Some(request_id) {
-            if active.requested_ssid != requested_ssid {
-                return Err(idempotency_conflict(&active.requested_ssid, requested_ssid));
+        if active.request_id.as_deref() == Some(request.request_id.as_str()) {
+            if active.intent.as_ref() != Some(&intent) {
+                return Err(idempotency_conflict(&active.requested_ssid, &request.ssid));
             }
             return Ok(Some(OperationAccepted {
                 operation_id: active.id.clone(),
@@ -166,10 +183,10 @@ fn check_idempotency(
     }
 
     if let Some(last) = &inner.last_user_operation
-        && last.request_id.as_deref() == Some(request_id)
+        && last.request_id.as_deref() == Some(request.request_id.as_str())
     {
-        if last.requested_ssid != requested_ssid {
-            return Err(idempotency_conflict(&last.requested_ssid, requested_ssid));
+        if last.intent.as_ref() != Some(&intent) {
+            return Err(idempotency_conflict(&last.requested_ssid, &request.ssid));
         }
         return Ok(Some(OperationAccepted {
             operation_id: last.id.clone(),
@@ -179,6 +196,38 @@ fn check_idempotency(
     }
 
     Ok(None)
+}
+
+fn wifi_intent(request: &SetWifiConfigRequest) -> OperationIntent {
+    let key = if request.encryption == "none" {
+        None
+    } else {
+        request.key.clone()
+    };
+    OperationIntent::Wifi {
+        ssid: request.ssid.clone(),
+        encryption: request.encryption.clone(),
+        key,
+    }
+}
+
+fn noop_last_operation(
+    accepted: &OperationAccepted,
+    revision: u64,
+    request: &SetWifiConfigRequest,
+) -> LastOperation {
+    LastOperation {
+        id: accepted.operation_id.clone(),
+        request_id: Some(request.request_id.clone()),
+        source: OperationSource::User,
+        kind: "wifi.set_config".to_owned(),
+        status: OperationStatus::Succeeded,
+        revision,
+        requested_ssid: request.ssid.clone(),
+        intent: Some(wifi_intent(request)),
+        error: None,
+        finished_at_ms: now_ms(),
+    }
 }
 
 fn idempotency_conflict(previous_ssid: &str, requested_ssid: &str) -> LegacyAppError {
@@ -251,8 +300,11 @@ fn build_wifi_change_context(
 impl From<crate::domain::errors::LegacyAppError> for WifiSetError {
     fn from(err: crate::domain::errors::LegacyAppError) -> Self {
         match err.code {
-            crate::domain::errors::ErrorCode::Busy | crate::domain::errors::ErrorCode::NotReady | crate::domain::errors::ErrorCode::MaintenanceMode => WifiSetError::NotReady,
-            crate::domain::errors::ErrorCode::RevisionConflict | crate::domain::errors::ErrorCode::IdempotencyConflict => WifiSetError::ApplyFailed,
+            crate::domain::errors::ErrorCode::Busy
+            | crate::domain::errors::ErrorCode::NotReady
+            | crate::domain::errors::ErrorCode::MaintenanceMode => WifiSetError::NotReady,
+            crate::domain::errors::ErrorCode::RevisionConflict
+            | crate::domain::errors::ErrorCode::IdempotencyConflict => WifiSetError::ApplyFailed,
             _ => WifiSetError::InvalidWifiConfig,
         }
     }

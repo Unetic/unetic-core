@@ -2,7 +2,7 @@ use std::path::Path;
 
 use serde_json::{Map, Value, json};
 
-use crate::domain::errors::{LegacyAppError, ErrorCode, ErrorStage};
+use crate::domain::errors::{ErrorCode, ErrorStage, LegacyAppError};
 
 pub fn call_ubus(object: &str, method: &str, request: Value) -> Result<Value, LegacyAppError> {
     let payload = serde_json::to_string(&request).map_err(|error| {

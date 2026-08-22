@@ -2,7 +2,7 @@ use std::{sync::Arc, thread};
 
 use super::App;
 use crate::{
-    domain::errors::{LegacyAppError, ErrorCode, ErrorStage},
+    domain::errors::{ErrorCode, ErrorStage, LegacyAppError},
     domain::{Lifecycle, MaintenanceState, PublicState},
 };
 

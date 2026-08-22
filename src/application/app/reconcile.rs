@@ -11,7 +11,7 @@ use crate::application::state::all_equal_config;
 use crate::{
     application::transaction::ChangeContext,
     application::wan::WanChangeContext,
-    domain::errors::{LegacyAppError, ErrorCode, ErrorStage},
+    domain::errors::{ErrorCode, ErrorStage, LegacyAppError},
     domain::{Lifecycle, OperationSource, OperationStatus},
 };
 
@@ -74,13 +74,17 @@ impl App {
     }
 
     pub fn sync_registered_devices(&self) -> Result<(), LegacyAppError> {
-        let (registered_devices, devices) = {
+        let (registered_devices, extenders, extender_clients) = {
             let inner = self.inner.lock().expect("app state poisoned");
-            let registered = inner.config.registered_devices.clone();
-            let devices = self.backend.read_devices(&inner.config.extenders, &inner.extender_clients)?;
-            (registered, devices)
+            (
+                inner.config.registered_devices.clone(),
+                inner.config.extenders.clone(),
+                inner.extender_clients.clone(),
+            )
         };
-        self.backend.sync_port_forwards(&registered_devices, &devices)
+        let devices = self.backend.read_devices(&extenders, &extender_clients)?;
+        self.backend
+            .sync_port_forwards(&registered_devices, &devices)
     }
 
     fn spawn_repair_task(self: &Arc<Self>, repair: Repair) {

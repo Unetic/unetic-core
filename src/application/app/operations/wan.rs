@@ -4,8 +4,8 @@ use crate::{
     application::app::{App, Inner},
     application::state::now_ms,
     application::wan::WanChangeContext,
-    domain::errors::{LegacyAppError, ErrorCode, ErrorStage},
-    domain::{LastOperation, Lifecycle, OperationSource, OperationStatus},
+    domain::errors::{ErrorCode, ErrorStage, LegacyAppError},
+    domain::{LastOperation, Lifecycle, OperationIntent, OperationSource, OperationStatus},
 };
 
 impl App {
@@ -103,7 +103,11 @@ impl App {
         self.publish();
     }
 
-    pub(crate) fn mark_wan_commit_uncertain(&self, context: &WanChangeContext, error: LegacyAppError) {
+    pub(crate) fn mark_wan_commit_uncertain(
+        &self,
+        context: &WanChangeContext,
+        error: LegacyAppError,
+    ) {
         let uncertain = LegacyAppError::new(
             ErrorCode::CommitUncertain,
             ErrorStage::Confirm,
@@ -156,6 +160,7 @@ fn make_wan_last_op(
         status,
         revision,
         requested_ssid: String::new(),
+        intent: Some(OperationIntent::Wan(context.new_wan.clone())),
         error,
         finished_at_ms: now_ms(),
     }

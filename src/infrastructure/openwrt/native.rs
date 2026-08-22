@@ -4,7 +4,7 @@ use serde_json::json;
 
 use super::{rpc, wan, wireless};
 use crate::{
-    domain::errors::{LegacyAppError, ErrorCode, ErrorStage},
+    domain::errors::{ErrorCode, ErrorStage, LegacyAppError},
     domain::{DiscoveredWan, DiscoveredWifi, WanDesired, WanPublicState, WifiNetworkConfig},
     infrastructure::backend::RouterBackend,
 };
@@ -182,32 +182,50 @@ impl RouterBackend for OpenWrtBackend {
     fn ports_list(&self) -> Result<Vec<crate::domain::ports::PhysicalPort>, LegacyAppError> {
         let empty_extenders: Vec<crate::domain::extender::KnownExtender> = Vec::new();
         let empty_clients = std::collections::HashMap::new();
-        let devices = self.read_devices(&empty_extenders, &empty_clients).unwrap_or_default();
-        Ok(super::ports::ports_list(&devices))
+        let devices = self
+            .read_devices(&empty_extenders, &empty_clients)
+            .unwrap_or_default();
+        let wan = self.read_wan_runtime_status()?.device;
+        Ok(super::ports::ports_list(&devices, wan.as_deref()))
     }
 
     fn read_system_info(&self) -> Result<crate::domain::system::SystemInfo, LegacyAppError> {
         Ok(super::system::read_system_info())
     }
 
-    fn read_devices(&self, extenders: &[crate::domain::extender::KnownExtender], extender_clients: &std::collections::HashMap<String, Vec<crate::domain::extender::ExtenderClient>>) -> Result<Vec<crate::domain::device::Device>, LegacyAppError> {
+    fn read_devices(
+        &self,
+        extenders: &[crate::domain::extender::KnownExtender],
+        extender_clients: &std::collections::HashMap<
+            String,
+            Vec<crate::domain::extender::ExtenderClient>,
+        >,
+    ) -> Result<Vec<crate::domain::device::Device>, LegacyAppError> {
         super::devices::read_devices(extenders, extender_clients)
     }
 
-    fn write_static_lease(&self, _mac: &str, _ip: &str, _hostname: Option<&str>) -> Result<(), LegacyAppError> {
-        Ok(())
+    fn write_static_lease(
+        &self,
+        mac: &str,
+        ip: &str,
+        hostname: Option<&str>,
+    ) -> Result<(), LegacyAppError> {
+        super::device_config::write_static_lease(mac, ip, hostname)
     }
-    fn delete_static_lease(&self, _mac: &str) -> Result<(), LegacyAppError> {
-        Ok(())
+    fn delete_static_lease(&self, mac: &str) -> Result<(), LegacyAppError> {
+        super::device_config::delete_static_lease(mac)
     }
-    fn sync_port_forwards(&self, _registered_devices: &[crate::domain::device::RegisteredDevice], _current_devices: &[crate::domain::device::Device]) -> Result<(), LegacyAppError> {
-        Ok(())
+    fn sync_port_forwards(
+        &self,
+        registered_devices: &[crate::domain::device::RegisteredDevice],
+        current_devices: &[crate::domain::device::Device],
+    ) -> Result<(), LegacyAppError> {
+        super::device_config::sync_port_forwards(registered_devices, current_devices)
     }
     fn read_dns_config(&self) -> Result<crate::domain::DnsConfig, LegacyAppError> {
-        Ok(super::dns::read_dns_config())
+        super::dns::read_dns_config()
     }
     fn write_dns_config(&self, cfg: &crate::domain::DnsConfig) -> Result<(), LegacyAppError> {
         super::dns::write_dns_config(cfg)
     }
-    fn write_ddns_config(&self, _cfg: &crate::domain::DdnsConfig) -> Result<(), crate::domain::errors::LegacyAppError> { Ok(()) }
 }

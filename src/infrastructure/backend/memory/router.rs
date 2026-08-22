@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use super::MemoryBackend;
 use crate::{
-    domain::errors::{LegacyAppError, ErrorCode, ErrorStage},
+    domain::errors::{ErrorCode, ErrorStage, LegacyAppError},
     domain::{
         DiscoveredWan, DiscoveredWifi, WanDesired, WanProtocol, WanPublicState, WanStatus,
         WifiNetworkConfig,
@@ -264,18 +264,30 @@ impl RouterBackend for MemoryBackend {
     fn read_devices(
         &self,
         _extenders: &[crate::domain::extender::KnownExtender],
-        _extender_clients: &std::collections::HashMap<String, Vec<crate::domain::extender::ExtenderClient>>
+        _extender_clients: &std::collections::HashMap<
+            String,
+            Vec<crate::domain::extender::ExtenderClient>,
+        >,
     ) -> Result<Vec<crate::domain::device::Device>, LegacyAppError> {
         Ok(super::mock::mock_devices())
     }
 
-    fn write_static_lease(&self, _mac: &str, _ip: &str, _hostname: Option<&str>) -> Result<(), LegacyAppError> {
+    fn write_static_lease(
+        &self,
+        _mac: &str,
+        _ip: &str,
+        _hostname: Option<&str>,
+    ) -> Result<(), LegacyAppError> {
         Ok(())
     }
     fn delete_static_lease(&self, _mac: &str) -> Result<(), LegacyAppError> {
         Ok(())
     }
-    fn sync_port_forwards(&self, _registered_devices: &[crate::domain::device::RegisteredDevice], _current_devices: &[crate::domain::device::Device]) -> Result<(), LegacyAppError> {
+    fn sync_port_forwards(
+        &self,
+        _registered_devices: &[crate::domain::device::RegisteredDevice],
+        _current_devices: &[crate::domain::device::Device],
+    ) -> Result<(), LegacyAppError> {
         Ok(())
     }
     fn read_dns_config(&self) -> Result<crate::domain::DnsConfig, LegacyAppError> {
@@ -284,5 +296,4 @@ impl RouterBackend for MemoryBackend {
     fn write_dns_config(&self, _cfg: &crate::domain::DnsConfig) -> Result<(), LegacyAppError> {
         Ok(())
     }
-    fn write_ddns_config(&self, _cfg: &crate::domain::DdnsConfig) -> Result<(), crate::domain::errors::LegacyAppError> { Ok(()) }
 }

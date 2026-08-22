@@ -1,2 +1,2 @@
-pub mod extender;
 pub mod device;
+pub mod extender;

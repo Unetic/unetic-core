@@ -1,39 +1,28 @@
 use crate::{
     application::app::App,
-    domain::{DdnsConfig, DdnsProvider, DdnsStatus},
-    domain::errors::{LegacyAppError, ErrorCode, ErrorStage},
+    domain::{
+        DdnsConfig, DdnsProvider, DdnsStatus,
+        errors::{ErrorCode, ErrorStage, LegacyAppError},
+    },
 };
 
 fn now_unix_ts() -> u64 {
-    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs()
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
 }
 
 impl App {
-    pub fn ddns_set(&self, cfg: DdnsConfig) -> Result<(), LegacyAppError> {
-        // Validate required fields
-        match cfg.provider {
-            DdnsProvider::Cloudflare => {
-                if cfg.cloudflare.is_none() {
-                    return Err(LegacyAppError::new(ErrorCode::InvalidArgument, ErrorStage::Validate, "cloudflare config missing"));
-                }
-            }
-            DdnsProvider::DuckDns => {
-                if cfg.duckdns.is_none() {
-                    return Err(LegacyAppError::new(ErrorCode::InvalidArgument, ErrorStage::Validate, "duckdns config missing"));
-                }
-            }
-            DdnsProvider::None => {}
-        }
+    pub fn ddns_set(&self, config: DdnsConfig) -> Result<(), LegacyAppError> {
+        validate_ddns_config(&config)?;
 
-        let mut inner = self.inner.lock().unwrap();
-        inner.config.ddns = cfg;
-        inner.config.revision += 1;
-        let config_clone = inner.config.clone();
-        
-        if let Err(e) = self.store.persist_config(&config_clone) {
-            return Err(e);
-        }
-        
+        let mut inner = self.inner.lock().expect("app state poisoned");
+        let mut desired = inner.config.clone();
+        desired.ddns = config;
+        desired.revision = desired.revision.saturating_add(1);
+        self.store.persist_config(&desired)?;
+        inner.config = desired;
         drop(inner);
         self.publish();
         Ok(())
@@ -45,9 +34,61 @@ impl App {
             last_update_ts: Some(now_unix_ts()),
             last_error: result.err(),
         };
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = self.inner.lock().expect("app state poisoned");
         inner.ddns_status = status;
         drop(inner);
         self.publish();
+    }
+}
+
+fn validate_ddns_config(config: &DdnsConfig) -> Result<(), LegacyAppError> {
+    if !config.enabled {
+        return Ok(());
+    }
+
+    let valid = match config.provider {
+        DdnsProvider::Cloudflare => config.cloudflare.as_ref().is_some_and(|cloudflare| {
+            all_present([
+                &cloudflare.zone_id,
+                &cloudflare.record_id,
+                &cloudflare.api_token,
+                &cloudflare.hostname,
+            ])
+        }),
+        DdnsProvider::DuckDns => config
+            .duckdns
+            .as_ref()
+            .is_some_and(|duckdns| all_present([&duckdns.token, &duckdns.domain])),
+        DdnsProvider::None => false,
+    };
+    if valid {
+        Ok(())
+    } else {
+        Err(LegacyAppError::new(
+            ErrorCode::InvalidArgument,
+            ErrorStage::Validate,
+            "enabled DDNS provider configuration is incomplete",
+        ))
+    }
+}
+
+fn all_present<const N: usize>(values: [&String; N]) -> bool {
+    values.iter().all(|value| !value.trim().is_empty())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::validate_ddns_config;
+    use crate::domain::{DdnsConfig, DdnsProvider};
+
+    #[test]
+    fn rejects_enabled_ddns_without_provider() {
+        let config = DdnsConfig {
+            enabled: true,
+            provider: DdnsProvider::None,
+            ..DdnsConfig::default()
+        };
+
+        assert!(validate_ddns_config(&config).is_err());
     }
 }

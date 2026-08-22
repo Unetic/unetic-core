@@ -12,7 +12,6 @@ pub enum PingError {
     CommandFailed = 2,
 }
 
-
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PingRequest {
     pub host: String,
@@ -25,14 +24,23 @@ pub struct PingResult {
 
 pub fn execute_ping(host: &str) -> Result<PingResult, PingError> {
     let host = host.trim();
-    if host.is_empty() {
+    if !is_valid_ping_host(host) {
         return Err(PingError::InvalidArgument);
     }
 
     let output = Command::new("ping")
-        .args(["-c", "4", host])
+        .args([
+            "-c",
+            crate::domain::PING_COUNT,
+            "-W",
+            crate::domain::PING_TIMEOUT_SECS,
+            host,
+        ])
         .output()
         .map_err(|_| PingError::CommandFailed)?;
+    if !output.status.success() {
+        return Err(PingError::CommandFailed);
+    }
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -45,6 +53,15 @@ pub fn execute_ping(host: &str) -> Result<PingResult, PingError> {
     };
 
     Ok(PingResult { output: output_str })
+}
+
+fn is_valid_ping_host(host: &str) -> bool {
+    !host.is_empty()
+        && host.len() <= 253
+        && !host.starts_with('-')
+        && host
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b':' | b'-' | b'_'))
 }
 
 impl App {
@@ -83,8 +100,11 @@ mod tests {
         let store = StateStore::new(std::env::temp_dir().join("unetic-test-ping-api"));
         let app = App::bootstrap(backend, store, tx);
 
-        let response_str =
-            crate::presentation::api::dispatch(&app, "tools.ping", r#"{"idempotence_token":"xyz","host":"127.0.0.1"}"#);
+        let response_str = crate::presentation::api::dispatch(
+            &app,
+            "tools.ping",
+            r#"{"idempotence_token":"xyz","host":"127.0.0.1"}"#,
+        );
         let val: serde_json::Value = serde_json::from_str(&response_str).expect("valid json");
         assert_eq!(val.get("error").and_then(|v| v.as_u64()), Some(0));
         assert!(val.pointer("/result/output").is_some());
@@ -97,7 +117,11 @@ mod tests {
         let store = StateStore::new(std::env::temp_dir().join("unetic-test-ping-invalid"));
         let app = App::bootstrap(backend, store, tx);
 
-        let response_str = crate::presentation::api::dispatch(&app, "tools.ping", r#"{"idempotence_token":"xyz","host":""}"#);
+        let response_str = crate::presentation::api::dispatch(
+            &app,
+            "tools.ping",
+            r#"{"idempotence_token":"xyz","host":""}"#,
+        );
         let val: serde_json::Value = serde_json::from_str(&response_str).expect("valid json");
         assert_eq!(val.get("error").and_then(|v| v.as_u64()), Some(1));
     }

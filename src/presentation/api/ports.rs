@@ -1,6 +1,6 @@
-use std::sync::Arc;
-use serde_json::{json, Value};
 use crate::application::App;
+use serde_json::{Value, json};
+use std::sync::Arc;
 
 #[derive(Debug, Clone, serde::Serialize)]
 #[repr(u32)]

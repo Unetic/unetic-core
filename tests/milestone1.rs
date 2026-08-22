@@ -1,7 +1,7 @@
 #![allow(clippy::pedantic)]
 
 use std::{
-    sync::{Arc, mpsc},
+    sync::Arc,
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
@@ -126,7 +126,10 @@ fn validation_encryption_requires_valid_key() {
             request_id: "req-missing-key".into(),
         })
         .expect_err("must reject missing key for non-none encryption");
-    assert_eq!(missing_key, unetic_core::application::app::handlers::WifiSetError::InvalidWifiConfig);
+    assert_eq!(
+        missing_key,
+        unetic_core::application::app::handlers::WifiSetError::InvalidWifiConfig
+    );
 
     let short_key = app
         .wifi_set_config(SetWifiConfigRequest {
@@ -137,7 +140,10 @@ fn validation_encryption_requires_valid_key() {
             request_id: "req-short-key".into(),
         })
         .expect_err("must reject key shorter than 8 chars");
-    assert_eq!(short_key, unetic_core::application::app::handlers::WifiSetError::InvalidWifiConfig);
+    assert_eq!(
+        short_key,
+        unetic_core::application::app::handlers::WifiSetError::InvalidWifiConfig
+    );
 
     let long_key = app
         .wifi_set_config(SetWifiConfigRequest {
@@ -148,7 +154,10 @@ fn validation_encryption_requires_valid_key() {
             request_id: "req-long-key".into(),
         })
         .expect_err("must reject key longer than 63 chars");
-    assert_eq!(long_key, unetic_core::application::app::handlers::WifiSetError::InvalidWifiConfig);
+    assert_eq!(
+        long_key,
+        unetic_core::application::app::handlers::WifiSetError::InvalidWifiConfig
+    );
 
     let valid_8 = app
         .wifi_set_config(SetWifiConfigRequest {
@@ -175,7 +184,10 @@ fn stale_revision_is_rejected_without_changing_router() {
         })
         .expect_err("must reject stale revision");
 
-    assert_eq!(error, unetic_core::application::app::handlers::WifiSetError::ApplyFailed);
+    assert_eq!(
+        error,
+        unetic_core::application::app::handlers::WifiSetError::ApplyFailed
+    );
     assert!(
         backend
             .committed_ssids()
@@ -312,7 +324,68 @@ fn reusing_request_id_for_different_intent_is_rejected() {
             request_id: "same-id-different-intent".into(),
         })
         .expect_err("different intent must not reuse request id");
-    assert_eq!(error, unetic_core::application::app::handlers::WifiSetError::ApplyFailed);
+    assert_eq!(
+        error,
+        unetic_core::application::app::handlers::WifiSetError::ApplyFailed
+    );
+}
+
+#[test]
+fn reusing_request_id_with_same_ssid_and_different_key_is_rejected() {
+    let (app, _) = test_app();
+    app.wifi_set_config(SetWifiConfigRequest {
+        ssid: "Home".into(),
+        encryption: "psk2".into(),
+        key: Some("first-password".into()),
+        expected_revision: 1,
+        request_id: "same-id-different-key".into(),
+    })
+    .expect("first accepted");
+
+    let error = app
+        .wifi_set_config(SetWifiConfigRequest {
+            ssid: "Home".into(),
+            encryption: "psk2".into(),
+            key: Some("second-password".into()),
+            expected_revision: 1,
+            request_id: "same-id-different-key".into(),
+        })
+        .expect_err("different key must not reuse request id");
+
+    assert_eq!(
+        error,
+        unetic_core::application::app::handlers::WifiSetError::ApplyFailed
+    );
+}
+
+#[test]
+fn noop_request_id_cannot_be_reused_for_different_intent() {
+    let (app, _) = test_app();
+    let first = app
+        .wifi_set_config(SetWifiConfigRequest {
+            ssid: "Home".into(),
+            encryption: "none".into(),
+            key: None,
+            expected_revision: 1,
+            request_id: "noop-id".into(),
+        })
+        .expect("noop accepted");
+    assert!(first.noop);
+
+    let error = app
+        .wifi_set_config(SetWifiConfigRequest {
+            ssid: "Other".into(),
+            encryption: "none".into(),
+            key: None,
+            expected_revision: 1,
+            request_id: "noop-id".into(),
+        })
+        .expect_err("noop request ID remains reserved");
+
+    assert_eq!(
+        error,
+        unetic_core::application::app::handlers::WifiSetError::ApplyFailed
+    );
 }
 
 #[test]
@@ -490,7 +563,10 @@ fn validation_rejects_invalid_ssids_and_handles_noop() {
             request_id: "req-empty".into(),
         })
         .expect_err("empty SSID rejected");
-    assert_eq!(empty_err, unetic_core::application::app::handlers::WifiSetError::InvalidWifiConfig);
+    assert_eq!(
+        empty_err,
+        unetic_core::application::app::handlers::WifiSetError::InvalidWifiConfig
+    );
 
     let too_long_err = app
         .wifi_set_config(SetWifiConfigRequest {
@@ -501,7 +577,10 @@ fn validation_rejects_invalid_ssids_and_handles_noop() {
             request_id: "req-too-long".into(),
         })
         .expect_err("33-byte SSID rejected");
-    assert_eq!(too_long_err, unetic_core::application::app::handlers::WifiSetError::InvalidWifiConfig);
+    assert_eq!(
+        too_long_err,
+        unetic_core::application::app::handlers::WifiSetError::InvalidWifiConfig
+    );
 
     let nul_err = app
         .wifi_set_config(SetWifiConfigRequest {
@@ -512,7 +591,10 @@ fn validation_rejects_invalid_ssids_and_handles_noop() {
             request_id: "req-nul".into(),
         })
         .expect_err("NUL byte SSID rejected");
-    assert_eq!(nul_err, unetic_core::application::app::handlers::WifiSetError::InvalidWifiConfig);
+    assert_eq!(
+        nul_err,
+        unetic_core::application::app::handlers::WifiSetError::InvalidWifiConfig
+    );
 
     let valid_32 = app
         .wifi_set_config(SetWifiConfigRequest {
@@ -685,7 +767,10 @@ fn concurrency_rejects_second_concurrent_operation_with_busy() {
             request_id: "req-second".into(),
         })
         .expect_err("second operation must be rejected with BUSY while first is active");
-    assert_eq!(second_err, unetic_core::application::app::handlers::WifiSetError::NotReady);
+    assert_eq!(
+        second_err,
+        unetic_core::application::app::handlers::WifiSetError::NotReady
+    );
 
     wait_for_idle(&app);
 }

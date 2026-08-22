@@ -2,7 +2,7 @@ use std::{thread, time::Instant};
 
 use crate::{
     application::app::App,
-    domain::errors::{LegacyAppError, ErrorCode, ErrorStage},
+    domain::errors::{ErrorCode, ErrorStage, LegacyAppError},
     domain::{OperationSource, WifiNetworkConfig},
 };
 
@@ -84,7 +84,10 @@ pub fn force_state_sync(
         let inner = app.inner.lock().unwrap();
         inner.config.wan.proto == crate::domain::WanProtocol::Extender
     };
-    if let Err(error) = app.backend.stage_wifi_config(&session.id, targets, config, is_extender) {
+    if let Err(error) = app
+        .backend
+        .stage_wifi_config(&session.id, targets, config, is_extender)
+    {
         let _ = app.backend.revert_staged(&session.id);
         return Err(error);
     }

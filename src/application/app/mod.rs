@@ -1,19 +1,17 @@
 use std::{
     collections::BTreeMap,
     sync::{
-        atomic::{AtomicBool, AtomicUsize, Ordering},
         Arc, Mutex,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
     },
     time::Duration,
 };
 
-use tokio::sync::broadcast::Sender;
 use serde_json::json;
-
+use tokio::sync::broadcast::Sender;
 
 use crate::{
     domain::errors::LegacyAppError,
-
     domain::{
         DesiredConfig, HealthState, LastOperation, Lifecycle, PublicOperation, PublicState,
         WifiPublicState,
@@ -24,6 +22,7 @@ use crate::{
 
 pub mod handlers;
 mod maintenance;
+mod mesh_state;
 mod operations;
 mod reconcile;
 mod recovery;
@@ -71,10 +70,14 @@ pub(crate) struct Inner {
     pub traffic: crate::domain::traffic::TrafficState,
     pub ddns_status: crate::domain::DdnsStatus,
     pub extender_ports: std::collections::HashMap<String, Vec<crate::domain::ports::PhysicalPort>>,
-    pub extender_clients: std::collections::HashMap<String, Vec<crate::domain::extender::ExtenderClient>>,
-    pub latest_scans: std::collections::HashMap<String, Vec<crate::domain::extender::ScannedNetwork>>,
+    pub extender_clients:
+        std::collections::HashMap<String, Vec<crate::domain::extender::ExtenderClient>>,
+    pub latest_scans:
+        std::collections::HashMap<String, Vec<crate::domain::extender::ScannedNetwork>>,
     pub pending_extenders: Vec<crate::domain::extender::PendingExtender>,
     pub extender_pairing_status: String,
+    pub approved_pairings: std::collections::HashMap<String, String>,
+    pub extender_pairing_key: String,
 }
 
 pub struct App {
@@ -86,7 +89,6 @@ pub struct App {
     pub(crate) op_counter: AtomicUsize,
     pub(crate) timing: Timing,
     pub subscriptions: crate::application::subscription::SubscriptionManager,
-    pub rrm_tx: Sender<()>,
 }
 
 impl App {
@@ -106,7 +108,8 @@ impl App {
     ) -> Arc<Self> {
         let store_ready = store.ensure();
         let store_err = store_ready.as_ref().err().cloned();
-        let (config, lifecycle, init_error) = config_init::load_initial_config(backend.as_ref(), &store);
+        let (config, lifecycle, init_error) =
+            config_init::load_initial_config(backend.as_ref(), &store);
         let startup_error = store_err.or(init_error);
 
         let boot_id = generate_id("boot");
@@ -149,13 +152,14 @@ impl App {
                 latest_scans: std::collections::HashMap::new(),
                 pending_extenders: Vec::new(),
                 extender_pairing_status: "idle".to_string(),
+                approved_pairings: std::collections::HashMap::new(),
+                extender_pairing_key: uuid::Uuid::new_v4().simple().to_string()[..8].to_owned(),
             }),
             event_tx,
             shutdown: AtomicBool::new(false),
             op_counter: AtomicUsize::new(1),
             timing,
             subscriptions: crate::application::subscription::SubscriptionManager::new(),
-            rrm_tx: tokio::sync::broadcast::channel(16).0,
         });
 
         app.init();
@@ -216,68 +220,16 @@ impl App {
     pub fn devices_list(&self) -> Result<Vec<crate::domain::device::Device>, LegacyAppError> {
         let (extenders, extender_clients) = {
             let inner = self.inner.lock().unwrap();
-            (inner.config.extenders.clone(), inner.extender_clients.clone())
+            (
+                inner.config.extenders.clone(),
+                inner.extender_clients.clone(),
+            )
         };
         self.backend.read_devices(&extenders, &extender_clients)
     }
 
     pub fn has_active_subscribers(&self) -> bool {
         self.subscriptions.has_active_subscribers()
-    }
-
-    pub(crate) fn mesh_add_pending(&self, extender: crate::domain::extender::PendingExtender) {
-        {
-            let mut inner = self.inner.lock().unwrap();
-            if !inner.pending_extenders.iter().any(|e| e.mac == extender.mac) {
-                if inner.pending_extenders.len() >= 50 {
-                    inner.pending_extenders.remove(0);
-                }
-                inner.pending_extenders.push(extender);
-            }
-        }
-        self.publish();
-    }
-
-    pub(crate) fn extender_set_token(&self, token: String) {
-        {
-            let mut inner = self.inner.lock().unwrap();
-            inner.config.extender_auth_token = Some(token);
-            let _ = self.store.persist_config(&inner.config);
-        }
-        self.publish();
-    }
-
-    pub(crate) fn extender_clear_token(&self) {
-        {
-            let mut inner = self.inner.lock().unwrap();
-            inner.config.extender_auth_token = None;
-            let _ = self.store.persist_config(&inner.config);
-        }
-        self.publish();
-    }
-
-    pub(crate) fn update_extender_ports(&self, mac: String, ports: Vec<crate::domain::ports::PhysicalPort>) {
-        {
-            let mut inner = self.inner.lock().unwrap();
-            inner.extender_ports.insert(mac, ports);
-        }
-        self.publish();
-    }
-
-    pub(crate) fn update_extender_telemetry(&self, mac: String, wireless_clients: Vec<crate::domain::extender::ExtenderClient>) {
-        {
-            let mut inner = self.inner.lock().unwrap();
-            inner.extender_clients.insert(mac, wireless_clients);
-        }
-        self.publish();
-    }
-
-    pub(crate) fn update_scan_results(&self, mac: String, networks: Vec<crate::domain::extender::ScannedNetwork>) {
-        {
-            let mut inner = self.inner.lock().unwrap();
-            inner.latest_scans.insert(mac, networks);
-        }
-        self.publish();
     }
 }
 

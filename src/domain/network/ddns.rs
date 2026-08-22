@@ -2,7 +2,12 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
-pub enum DdnsProvider { #[default] None, Cloudflare, DuckDns }
+pub enum DdnsProvider {
+    #[default]
+    None,
+    Cloudflare,
+    DuckDns,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CloudflareConfig {

@@ -1,8 +1,8 @@
-use std::sync::Arc;
-use serde_json::{Value, json};
 use crate::application::app::App;
+use crate::domain::errors::{ErrorCode, LegacyAppError};
 use crate::domain::{DnsConfig, DnsRecord};
-use crate::domain::errors::{LegacyAppError, ErrorCode};
+use serde_json::{Value, json};
+use std::sync::Arc;
 
 #[repr(u32)]
 pub enum DnsError {
@@ -48,7 +48,9 @@ pub fn dispatch(app: &Arc<App>, method: &str, request: Value) -> Result<Value, u
         }
         "dns.record.add" => {
             let record: DnsRecord = serde_json::from_value(request).map_err(|_| 1u32)?;
-            app.dns_add_record(record).map(|_| json!({})).map_err(map_error)
+            app.dns_add_record(record)
+                .map(|_| json!({}))
+                .map_err(map_error)
         }
         "dns.record.remove" => {
             #[derive(serde::Deserialize)]
@@ -56,7 +58,9 @@ pub fn dispatch(app: &Arc<App>, method: &str, request: Value) -> Result<Value, u
                 id: String,
             }
             let req: RmReq = serde_json::from_value(request).map_err(|_| 1u32)?;
-            app.dns_remove_record(&req.id).map(|_| json!({})).map_err(map_error)
+            app.dns_remove_record(&req.id)
+                .map(|_| json!({}))
+                .map_err(map_error)
         }
         _ => Err(1u32),
     }

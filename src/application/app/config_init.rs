@@ -1,5 +1,5 @@
+use crate::domain::errors::{ErrorCode, ErrorStage, LegacyAppError};
 use crate::domain::{DesiredConfig, Lifecycle};
-use crate::domain::errors::{LegacyAppError, ErrorCode, ErrorStage};
 use crate::infrastructure::backend::RouterBackend;
 use crate::infrastructure::storage::StateStore;
 use tracing::{error, warn};

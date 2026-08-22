@@ -4,9 +4,9 @@ use tracing::{error, info, warn};
 
 use crate::{
     application::app::App,
-    domain::errors::{LegacyAppError, ErrorCode, ErrorStage},
+    domain::errors::{ErrorCode, ErrorStage, LegacyAppError},
     domain::{
-        OperationSource, OperationStatus, PublicOperation, STATE_SCHEMA_VERSION,
+        OperationIntent, OperationSource, OperationStatus, PublicOperation, STATE_SCHEMA_VERSION,
         TransactionJournal, WifiNetworkConfig,
     },
 };
@@ -25,7 +25,11 @@ pub struct ChangeContext {
 
 impl ChangeContext {
     #[must_use]
-    pub fn public(&self, status: OperationStatus, error: Option<LegacyAppError>) -> PublicOperation {
+    pub fn public(
+        &self,
+        status: OperationStatus,
+        error: Option<LegacyAppError>,
+    ) -> PublicOperation {
         PublicOperation {
             id: self.operation_id.clone(),
             request_id: self.request_id.clone(),
@@ -33,6 +37,11 @@ impl ChangeContext {
             kind: "wifi.set_config".into(),
             status,
             requested_ssid: self.new_wifi.ssid.clone(),
+            intent: Some(OperationIntent::Wifi {
+                ssid: self.new_wifi.ssid.clone(),
+                encryption: self.new_wifi.encryption.clone(),
+                key: self.new_wifi.key.clone(),
+            }),
             error,
         }
     }

@@ -13,7 +13,9 @@ pub fn read_iface_counters() -> HashMap<String, (u64, u64)> {
                 }
                 let stat_vals: Vec<&str> = stats_part.split_whitespace().collect();
                 if stat_vals.len() >= 9 {
-                    if let (Ok(rx), Ok(tx)) = (stat_vals[0].parse::<u64>(), stat_vals[8].parse::<u64>()) {
+                    if let (Ok(rx), Ok(tx)) =
+                        (stat_vals[0].parse::<u64>(), stat_vals[8].parse::<u64>())
+                    {
                         stats.insert(iface.to_string(), (rx, tx));
                     }
                 }

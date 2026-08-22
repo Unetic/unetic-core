@@ -1,6 +1,6 @@
-pub mod wan;
-pub mod wifi;
+pub mod ddns;
 pub mod dns;
 pub mod ports;
 pub mod traffic;
-pub mod ddns;
+pub mod wan;
+pub mod wifi;

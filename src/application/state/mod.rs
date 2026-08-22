@@ -10,10 +10,9 @@ use tracing::warn;
 
 use crate::application::app::{App, Inner};
 use crate::{
-    domain::errors::{LegacyAppError, ErrorCode, ErrorStage},
+    domain::errors::{ErrorCode, ErrorStage, LegacyAppError},
     domain::{
-        DriftState, MaintenanceState, PublicState, WifiNetworkConfig, WifiPublicState,
-        WifiStatus,
+        DriftState, MaintenanceState, PublicState, WifiNetworkConfig, WifiPublicState, WifiStatus,
     },
 };
 
@@ -97,7 +96,7 @@ impl App {
     }
 }
 
-pub fn snapshot(inner: &Inner) -> PublicState {
+pub(crate) fn snapshot(inner: &Inner) -> PublicState {
     let desired = &inner.config.wifi.primary;
     let mut drift_fields: Vec<String> = Vec::new();
     for target in &desired.targets {
@@ -167,7 +166,12 @@ pub fn snapshot(inner: &Inner) -> PublicState {
         traffic: inner.traffic.clone(),
         ddns_config: inner.config.ddns.clone(),
         ddns_status: inner.ddns_status.clone(),
-        extenders: inner.config.extenders.clone(),
+        extenders: inner
+            .config
+            .extenders
+            .iter()
+            .map(crate::domain::extender::PublicExtender::from)
+            .collect(),
         extender_ports: inner.extender_ports.clone(),
         pending_extenders: inner.pending_extenders.clone(),
         extender_pairing_status: inner.extender_pairing_status.clone(),

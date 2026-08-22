@@ -4,8 +4,8 @@ use crate::{
     application::app::{App, Inner},
     application::state::now_ms,
     application::transaction::ChangeContext,
-    domain::errors::{LegacyAppError, ErrorCode, ErrorStage},
-    domain::{LastOperation, Lifecycle, OperationSource, OperationStatus},
+    domain::errors::{ErrorCode, ErrorStage, LegacyAppError},
+    domain::{LastOperation, Lifecycle, OperationIntent, OperationSource, OperationStatus},
 };
 
 impl App {
@@ -38,7 +38,10 @@ impl App {
         Ok(())
     }
 
-    pub(crate) fn persist_new_desired(&self, context: &ChangeContext) -> Result<(), LegacyAppError> {
+    pub(crate) fn persist_new_desired(
+        &self,
+        context: &ChangeContext,
+    ) -> Result<(), LegacyAppError> {
         let mut config = {
             let inner = self.inner.lock().expect("app state poisoned");
             inner.config.clone()
@@ -190,6 +193,11 @@ impl App {
             status,
             revision,
             requested_ssid: journal.new_ssid.clone(),
+            intent: Some(OperationIntent::Wifi {
+                ssid: journal.new_ssid.clone(),
+                encryption: journal.new_encryption.clone(),
+                key: journal.new_key.clone(),
+            }),
             error,
             finished_at_ms: now_ms(),
         };
@@ -214,6 +222,11 @@ fn make_wifi_last_op(
         status,
         revision,
         requested_ssid: context.new_wifi.ssid.clone(),
+        intent: Some(OperationIntent::Wifi {
+            ssid: context.new_wifi.ssid.clone(),
+            encryption: context.new_wifi.encryption.clone(),
+            key: context.new_wifi.key.clone(),
+        }),
         error,
         finished_at_ms: now_ms(),
     }

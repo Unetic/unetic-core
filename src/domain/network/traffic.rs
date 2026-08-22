@@ -1,11 +1,17 @@
-use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
-pub struct IfaceStats { pub rx_bps: u64, pub tx_bps: u64 }
+pub struct IfaceStats {
+    pub rx_bps: u64,
+    pub tx_bps: u64,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
-pub struct DeviceStats { pub rx_bps: u64, pub tx_bps: u64 }
+pub struct DeviceStats {
+    pub rx_bps: u64,
+    pub tx_bps: u64,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct TrafficState {

@@ -1,153 +1,198 @@
-use std::process::Command;
-use crate::domain::{DnsConfig, DnsRecord};
-use crate::domain::errors::{LegacyAppError, ErrorCode, ErrorStage};
+use std::{collections::BTreeMap, process::Command};
 
-pub fn read_dns_config() -> DnsConfig {
+use crate::domain::{
+    DnsConfig, DnsRecord,
+    errors::{ErrorCode, ErrorStage, LegacyAppError},
+};
+
+pub fn read_dns_config() -> Result<DnsConfig, LegacyAppError> {
+    let output = run_uci(&["show", "dhcp"])?;
+    Ok(parse_dns_config(&String::from_utf8_lossy(&output.stdout)))
+}
+
+pub fn write_dns_config(config: &DnsConfig) -> Result<(), LegacyAppError> {
+    write_dnsmasq_options(config)?;
+    replace_custom_records(config)?;
+    run_uci(&["commit", "dhcp"])?;
+    run_command("reload_config", &[])?;
+    Ok(())
+}
+
+fn parse_dns_config(raw: &str) -> DnsConfig {
     let mut config = DnsConfig::default();
-    let output = Command::new("uci")
-        .arg("show")
-        .arg("dhcp")
-        .output()
-        .expect("failed to execute uci show dhcp");
+    let mut records = BTreeMap::<String, DnsRecord>::new();
 
-    if output.status.success() {
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        for line in stdout.lines() {
-            if line.starts_with("dhcp.@dnsmasq[0].server=") {
-                if let Some(servers_str) = line.split('=').nth(1) {
-                    let servers_str = servers_str.trim_matches('\'');
-                    config.upstream = servers_str.split(' ').map(|s| s.to_string()).collect();
-                }
-            } else if line.starts_with("dhcp.@dnsmasq[0].local=") {
-                if let Some(val) = line.split('=').nth(1) {
-                    let val = val.trim_matches('\'').trim_start_matches('/').trim_end_matches('/');
-                    if !val.is_empty() {
-                        config.local_domain = Some(val.to_string());
-                    }
-                }
-            } else if line.starts_with("dhcp.lan.start=") {
-                if let Some(val) = line.split('=').nth(1) {
-                    if let Ok(v) = val.trim_matches('\'').parse::<u32>() {
-                        config.dhcp_start = v;
-                    }
-                }
-            } else if line.starts_with("dhcp.lan.limit=") {
-                if let Some(val) = line.split('=').nth(1) {
-                    if let Ok(v) = val.trim_matches('\'').parse::<u32>() {
-                        config.dhcp_limit = v;
-                    }
-                }
-            } else if line.starts_with("dhcp.lan.leasetime=") {
-                if let Some(val) = line.split('=').nth(1) {
-                    let val = val.trim_matches('\'').trim_end_matches('h');
-                    if let Ok(v) = val.parse::<u32>() {
-                        config.dhcp_lease_hours = v;
-                    }
+    for line in raw.lines() {
+        let Some((key, raw_value)) = line.split_once('=') else {
+            continue;
+        };
+        let value = raw_value.trim_matches('\'');
+        match key {
+            "dhcp.@dnsmasq[0].server" => {
+                config
+                    .upstream
+                    .extend(value.split_whitespace().map(str::to_owned));
+            }
+            "dhcp.@dnsmasq[0].local" => {
+                let domain = value.trim_matches('/');
+                if !domain.is_empty() {
+                    config.local_domain = Some(domain.to_owned());
                 }
             }
-        }
-        
-        // Custom records... a bit trickier to parse from `uci show dhcp` if we want full fidelity.
-        // We look for dhcp.record_id=domain
-        // dhcp.record_id.name=hostname
-        // dhcp.record_id.ip=ip
-        // For simplicity, we can parse them in a second pass.
-        let mut records: std::collections::HashMap<String, DnsRecord> = std::collections::HashMap::new();
-        for line in stdout.lines() {
-            if line.starts_with("dhcp.") && line.contains("=domain") && !line.contains('.') {
-                // wait, format is dhcp.record_id=domain
-                if let Some(id_part) = line.split('=').next() {
-                    let id = id_part.trim_start_matches("dhcp.");
-                    if !records.contains_key(id) {
-                        records.insert(id.to_string(), DnsRecord { id: id.to_string(), hostname: String::new(), ip: String::new() });
-                    }
-                }
+            "dhcp.lan.start" => update_number(value, &mut config.dhcp_start),
+            "dhcp.lan.limit" => update_number(value, &mut config.dhcp_limit),
+            "dhcp.lan.leasetime" => {
+                update_number(value.trim_end_matches('h'), &mut config.dhcp_lease_hours);
             }
+            _ => parse_record_line(key, value, &mut records),
         }
-        for line in stdout.lines() {
-            for (id, record) in records.iter_mut() {
-                if line.starts_with(&format!("dhcp.{}.name=", id)) {
-                    if let Some(val) = line.split('=').nth(1) {
-                        record.hostname = val.trim_matches('\'').to_string();
-                    }
-                } else if line.starts_with(&format!("dhcp.{}.ip=", id)) {
-                    if let Some(val) = line.split('=').nth(1) {
-                        record.ip = val.trim_matches('\'').to_string();
-                    }
-                }
-            }
-        }
-        config.custom_records = records.into_values().collect();
     }
-    
+
+    config.custom_records = records
+        .into_values()
+        .filter(|record| !record.hostname.is_empty() && !record.ip.is_empty())
+        .collect();
     config
 }
 
-pub fn write_dns_config(cfg: &DnsConfig) -> Result<(), LegacyAppError> {
-    let mut cmds: Vec<Vec<String>> = vec![];
-    
-    if cfg.upstream.is_empty() {
-        cmds.push(vec!["delete".to_string(), "dhcp.@dnsmasq[0].server".to_string()]);
-    } else {
-        cmds.push(vec!["set".to_string(), format!("dhcp.@dnsmasq[0].server={}", cfg.upstream.join(" "))]);
+fn parse_record_line(key: &str, value: &str, records: &mut BTreeMap<String, DnsRecord>) {
+    let Some(rest) = key.strip_prefix("dhcp.record_") else {
+        return;
+    };
+    let (id, field) = rest
+        .split_once('.')
+        .map_or((rest, None), |(id, field)| (id, Some(field)));
+    if id.is_empty() {
+        return;
     }
-    
-    cmds.push(vec!["set".to_string(), format!("dhcp.lan.start={}", cfg.dhcp_start)]);
-    cmds.push(vec!["set".to_string(), format!("dhcp.lan.limit={}", cfg.dhcp_limit)]);
-    cmds.push(vec!["set".to_string(), format!("dhcp.lan.leasetime={}h", cfg.dhcp_lease_hours)]);
-    
-    if let Some(local) = &cfg.local_domain {
-        cmds.push(vec!["set".to_string(), format!("dhcp.@dnsmasq[0].local=/{}/", local)]);
-        cmds.push(vec!["set".to_string(), format!("dhcp.@dnsmasq[0].domain={}", local)]);
-    } else {
-        cmds.push(vec!["delete".to_string(), "dhcp.@dnsmasq[0].local".to_string()]);
-        cmds.push(vec!["delete".to_string(), "dhcp.@dnsmasq[0].domain".to_string()]);
+
+    if field.is_none() && value != "domain" {
+        return;
     }
-    
-    // Custom records
-    // First, clear existing records.
-    let output = Command::new("uci")
-        .arg("show")
-        .arg("dhcp")
-        .output()
-        .map_err(|e| LegacyAppError::new(ErrorCode::UciApplyFailed, ErrorStage::Apply, e.to_string()))?;
-    
-    if output.status.success() {
-        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-        for line in stdout.lines() {
-            if line.starts_with("dhcp.record_") && line.contains("=domain") {
-                if let Some(id_part) = line.split('=').next() {
-                    cmds.push(vec!["delete".to_string(), id_part.to_string()]);
-                }
-            }
+    let record = records.entry(id.to_owned()).or_insert_with(|| DnsRecord {
+        id: id.to_owned(),
+        hostname: String::new(),
+        ip: String::new(),
+    });
+    match field {
+        Some("name") => record.hostname = value.to_owned(),
+        Some("ip") => record.ip = value.to_owned(),
+        _ => {}
+    }
+}
+
+fn update_number(value: &str, target: &mut u32) {
+    if let Ok(parsed) = value.parse() {
+        *target = parsed;
+    }
+}
+
+fn write_dnsmasq_options(config: &DnsConfig) -> Result<(), LegacyAppError> {
+    if config.upstream.is_empty() {
+        delete_if_present("dhcp.@dnsmasq[0].server")?;
+    } else {
+        uci_set(&format!(
+            "dhcp.@dnsmasq[0].server={}",
+            config.upstream.join(" ")
+        ))?;
+    }
+    uci_set(&format!("dhcp.lan.start={}", config.dhcp_start))?;
+    uci_set(&format!("dhcp.lan.limit={}", config.dhcp_limit))?;
+    uci_set(&format!("dhcp.lan.leasetime={}h", config.dhcp_lease_hours))?;
+
+    if let Some(domain) = &config.local_domain {
+        uci_set(&format!("dhcp.@dnsmasq[0].local=/{domain}/"))?;
+        uci_set(&format!("dhcp.@dnsmasq[0].domain={domain}"))?;
+    } else {
+        delete_if_present("dhcp.@dnsmasq[0].local")?;
+        delete_if_present("dhcp.@dnsmasq[0].domain")?;
+    }
+    Ok(())
+}
+
+fn replace_custom_records(config: &DnsConfig) -> Result<(), LegacyAppError> {
+    let output = run_uci(&["show", "dhcp"])?;
+    for line in String::from_utf8_lossy(&output.stdout).lines() {
+        let Some((section, kind)) = line.split_once('=') else {
+            continue;
+        };
+        if section.starts_with("dhcp.record_") && kind.trim_matches('\'') == "domain" {
+            delete_if_present(section)?;
         }
     }
-    
-    for record in &cfg.custom_records {
+
+    for record in &config.custom_records {
         let section = format!("dhcp.record_{}", record.id);
-        cmds.push(vec!["set".to_string(), format!("{}=domain", section)]);
-        cmds.push(vec!["set".to_string(), format!("{}.name={}", section, record.hostname)]);
-        cmds.push(vec!["set".to_string(), format!("{}.ip={}", section, record.ip)]);
+        uci_set(&format!("{section}=domain"))?;
+        uci_set(&format!("{section}.name={}", record.hostname))?;
+        uci_set(&format!("{section}.ip={}", record.ip))?;
     }
-    
-    for args in cmds {
-        let mut cmd = Command::new("uci");
-        cmd.args(&args);
-        // ignore errors on delete if doesn't exist
-        let _ = cmd.output();
-    }
-    
-    let res = Command::new("uci")
-        .arg("commit")
-        .arg("dhcp")
-        .output()
-        .map_err(|e| LegacyAppError::new(ErrorCode::UciApplyFailed, ErrorStage::Apply, e.to_string()))?;
-        
-    if !res.status.success() {
-        return Err(LegacyAppError::new(ErrorCode::UciApplyFailed, ErrorStage::Apply, "uci commit dhcp failed".to_string()));
-    }
-    
-    let _ = Command::new("reload_config").output();
-    
     Ok(())
+}
+
+fn uci_set(value: &str) -> Result<(), LegacyAppError> {
+    run_uci(&["set", value]).map(|_| ())
+}
+
+fn delete_if_present(key: &str) -> Result<(), LegacyAppError> {
+    let output = Command::new("uci")
+        .args(["-q", "delete", key])
+        .output()
+        .map_err(command_error)?;
+    if output.status.success() || output.status.code() == Some(1) {
+        Ok(())
+    } else {
+        Err(command_failed("uci", &output))
+    }
+}
+
+fn run_uci(args: &[&str]) -> Result<std::process::Output, LegacyAppError> {
+    run_command("uci", args)
+}
+
+fn run_command(program: &str, args: &[&str]) -> Result<std::process::Output, LegacyAppError> {
+    let output = Command::new(program)
+        .args(args)
+        .output()
+        .map_err(command_error)?;
+    if output.status.success() {
+        Ok(output)
+    } else {
+        Err(command_failed(program, &output))
+    }
+}
+
+fn command_error(error: std::io::Error) -> LegacyAppError {
+    LegacyAppError::new(
+        ErrorCode::UciApplyFailed,
+        ErrorStage::Apply,
+        error.to_string(),
+    )
+}
+
+fn command_failed(program: &str, output: &std::process::Output) -> LegacyAppError {
+    LegacyAppError::new(
+        ErrorCode::UciApplyFailed,
+        ErrorStage::Apply,
+        format!(
+            "{program} failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ),
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_dns_config;
+
+    #[test]
+    fn parses_named_domain_records() {
+        let raw = "dhcp.record_printer=domain\ndhcp.record_printer.name='printer.lan'\ndhcp.record_printer.ip='192.168.1.20'\n";
+        let config = parse_dns_config(raw);
+
+        assert_eq!(config.custom_records.len(), 1);
+        assert_eq!(config.custom_records[0].id, "printer");
+        assert_eq!(config.custom_records[0].hostname, "printer.lan");
+        assert_eq!(config.custom_records[0].ip, "192.168.1.20");
+    }
 }

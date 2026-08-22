@@ -1,7 +1,7 @@
 #![allow(clippy::pedantic)]
 
 use std::{
-    sync::{Arc, mpsc},
+    sync::Arc,
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
@@ -150,6 +150,38 @@ fn test_api_set_wan_extender_success() {
             .expect("last operation")
             .status,
         OperationStatus::Succeeded
+    );
+}
+
+#[test]
+fn test_wan_request_id_rejects_different_configuration() {
+    let app = test_app();
+    app.set_wan(SetWanRequest {
+        expected_revision: 1,
+        request_id: "same-wan-request".into(),
+        wan: WanDesired {
+            present: true,
+            proto: WanProtocol::Dhcp,
+            ..WanDesired::default()
+        },
+    })
+    .expect("first accepted");
+
+    let error = app
+        .set_wan(SetWanRequest {
+            expected_revision: 1,
+            request_id: "same-wan-request".into(),
+            wan: WanDesired {
+                present: true,
+                proto: WanProtocol::Extender,
+                ..WanDesired::default()
+            },
+        })
+        .expect_err("different WAN intent rejected");
+
+    assert_eq!(
+        error.code,
+        unetic_core::domain::errors::ErrorCode::IdempotencyConflict
     );
 }
 

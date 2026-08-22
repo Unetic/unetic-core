@@ -1,6 +1,6 @@
 use super::MemoryBackend;
 use crate::{
-    domain::errors::{LegacyAppError, ErrorCode, ErrorStage},
+    domain::errors::{ErrorCode, ErrorStage, LegacyAppError},
     domain::{DiscoveredWan, WanDesired, WanPublicState},
 };
 

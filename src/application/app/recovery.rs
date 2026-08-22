@@ -2,7 +2,7 @@ use tracing::{info, warn};
 
 use super::App;
 use crate::{
-    domain::errors::{LegacyAppError, ErrorCode, ErrorStage},
+    domain::errors::{ErrorCode, ErrorStage, LegacyAppError},
     domain::{OperationSource, OperationStatus, TransactionJournal, WifiNetworkConfig},
 };
 
@@ -37,7 +37,10 @@ impl App {
         Ok(())
     }
 
-    fn recover_old_desired_state(&self, journal: &TransactionJournal) -> Result<(), LegacyAppError> {
+    fn recover_old_desired_state(
+        &self,
+        journal: &TransactionJournal,
+    ) -> Result<(), LegacyAppError> {
         info!(
             operation_id = %journal.operation_id,
             "recovering interrupted transaction to old desired state"
@@ -71,7 +74,10 @@ impl App {
         Ok(())
     }
 
-    fn confirm_new_desired_state(&self, journal: &TransactionJournal) -> Result<(), LegacyAppError> {
+    fn confirm_new_desired_state(
+        &self,
+        journal: &TransactionJournal,
+    ) -> Result<(), LegacyAppError> {
         info!(
             operation_id = %journal.operation_id,
             "confirming committed desired state after restart"

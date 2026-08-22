@@ -23,9 +23,15 @@ pub struct DnsConfig {
     pub custom_records: Vec<DnsRecord>,
 }
 
-fn default_dhcp_start() -> u32 { 100 }
-fn default_dhcp_limit() -> u32 { 150 }
-fn default_dhcp_lease_hours() -> u32 { 12 }
+fn default_dhcp_start() -> u32 {
+    100
+}
+fn default_dhcp_limit() -> u32 {
+    150
+}
+fn default_dhcp_lease_hours() -> u32 {
+    12
+}
 
 impl Default for DnsConfig {
     fn default() -> Self {

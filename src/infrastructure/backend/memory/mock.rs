@@ -1,8 +1,4 @@
-use crate::{
-    domain::device::Device,
-
-    domain::system::SystemInfo,
-};
+use crate::{domain::device::Device, domain::system::SystemInfo};
 
 pub(crate) fn mock_ports_info() -> Vec<crate::domain::ports::PhysicalPort> {
     use crate::domain::ports::{PhysicalPort, PortConnection, PortSpeed, PortType};
@@ -36,7 +32,7 @@ pub(crate) fn mock_ports_info() -> Vec<crate::domain::ports::PhysicalPort> {
                     mac: "11:22:33:44:55:66".to_string(),
                     ip: Some("192.168.1.103".to_string()),
                     hostname: Some("Switch-Downstream".to_string()),
-                }
+                },
             ],
         },
         PhysicalPort {
@@ -80,7 +76,10 @@ pub(crate) fn mock_devices() -> Vec<Device> {
             ip: Some("192.168.1.100".into()),
             ip6: Some("2001:db8::1".into()),
             hostname: Some("Alice-Phone".into()),
-            connection: crate::domain::device::DeviceConnection::Wireless { signal_dbm: 82, distance_m: 10.0 },
+            connection: crate::domain::device::DeviceConnection::Wireless {
+                signal_dbm: -82,
+                distance_m: 10.0,
+            },
         },
         Device {
             mac: "66:77:88:99:aa:bb".into(),
@@ -94,38 +93,10 @@ pub(crate) fn mock_devices() -> Vec<Device> {
             ip: Some("192.168.1.102".into()),
             ip6: None,
             hostname: None,
-            connection: crate::domain::device::DeviceConnection::Wireless { signal_dbm: 50, distance_m: 5.0 },
+            connection: crate::domain::device::DeviceConnection::Wireless {
+                signal_dbm: -50,
+                distance_m: 5.0,
+            },
         },
     ]
-}
-
-pub(crate) fn mock_dns_config() -> crate::domain::DnsConfig {
-    crate::domain::DnsConfig {
-        upstream: vec!["1.1.1.1".to_string(), "1.0.0.1".to_string()],
-        local_domain: Some("home.local".to_string()),
-        dhcp_start: 100,
-        dhcp_limit: 150,
-        dhcp_lease_hours: 12,
-        custom_records: vec![
-            crate::domain::DnsRecord {
-                id: "nas".to_string(),
-                hostname: "nas.home.local".to_string(),
-                ip: "192.168.1.10".to_string(),
-            }
-        ],
-    }
-}
-
-pub(crate) fn mock_traffic() -> crate::domain::traffic::TrafficState {
-    use crate::domain::traffic::{IfaceStats, TrafficState};
-    use std::collections::HashMap;
-
-    let mut ifaces = HashMap::new();
-    ifaces.insert("br-lan".to_string(), IfaceStats { rx_bps: 1_250_000, tx_bps: 0 });
-    ifaces.insert("eth0".to_string(), IfaceStats { rx_bps: 0, tx_bps: 62_500 });
-
-    TrafficState {
-        ifaces,
-        devices: HashMap::new(),
-    }
 }

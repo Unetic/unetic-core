@@ -15,6 +15,23 @@ pub struct KnownExtender {
     pub auth_token: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PublicExtender {
+    pub mac: String,
+    pub ip: String,
+    pub model: String,
+}
+
+impl From<&KnownExtender> for PublicExtender {
+    fn from(extender: &KnownExtender) -> Self {
+        Self {
+            mac: extender.mac.clone(),
+            ip: extender.ip.clone(),
+            model: extender.model.clone(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ExtenderClient {
     pub mac: String,
@@ -33,17 +50,36 @@ pub struct ScannedNetwork {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum MeshClientMessage {
-    PairRequest { mac: String, model: String, pairing_key: String },
-    Auth { token: String },
-    Telemetry { mac: String, ports: Vec<crate::domain::ports::PhysicalPort>, wireless_clients: Vec<ExtenderClient> },
-    ScanResults { mac: String, networks: Vec<ScannedNetwork> },
+    PairRequest {
+        mac: String,
+        model: String,
+        pairing_key: String,
+    },
+    Auth {
+        token: String,
+    },
+    Telemetry {
+        mac: String,
+        ports: Vec<crate::domain::ports::PhysicalPort>,
+        wireless_clients: Vec<ExtenderClient>,
+    },
+    ScanResults {
+        mac: String,
+        networks: Vec<ScannedNetwork>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum MeshServerMessage {
-    PairStatus { status: String, token: Option<String> },
-    AuthResult { success: bool },
-    MasterWifi { config: crate::domain::wifi::WifiNetworkConfig },
-    CommandScanAirwaves,
+    PairStatus {
+        status: String,
+        token: Option<String>,
+    },
+    AuthResult {
+        success: bool,
+    },
+    MasterWifi {
+        config: crate::domain::wifi::WifiNetworkConfig,
+    },
 }

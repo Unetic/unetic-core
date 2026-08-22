@@ -4,18 +4,23 @@ use tracing::{error, info, warn};
 use unetic_openwrt_sys::Bridge;
 
 use crate::application::app::App;
-use crate::presentation::api;
 use crate::domain::PublicState;
+use crate::presentation::api;
 
-pub async fn run_event_loop(app: Arc<App>, mut event_rx: Receiver<PublicState>, is_memory: bool) -> anyhow::Result<()> {
+pub async fn run_event_loop(
+    app: Arc<App>,
+    mut event_rx: Receiver<PublicState>,
+    is_memory: bool,
+) -> anyhow::Result<()> {
     if is_memory {
         info!("memory backend is active; ubus server is disabled");
-        wait_for_signal().await;
+        wait_for_signal().await?;
         app.shutdown();
         return Ok(());
     }
 
-    let bridge = Bridge::load().map_err(|e| anyhow::anyhow!("failed to load OpenWrt ubus bridge: {}", e))?;
+    let bridge =
+        Bridge::load().map_err(|e| anyhow::anyhow!("failed to load OpenWrt ubus bridge: {}", e))?;
     let callback_app = Arc::clone(&app);
     let mut server = bridge
         .server(move |method, request| api::dispatch(&callback_app, method, request))
@@ -73,19 +78,21 @@ pub async fn run_event_loop(app: Arc<App>, mut event_rx: Receiver<PublicState>, 
     Ok(())
 }
 
-async fn wait_for_signal() {
+async fn wait_for_signal() -> anyhow::Result<()> {
     #[cfg(unix)]
     {
         use tokio::signal::unix::{SignalKind, signal};
-        let mut term = signal(SignalKind::terminate()).expect("SIGTERM handler");
+        let mut term = signal(SignalKind::terminate())?;
         tokio::select! {
-            _ = tokio::signal::ctrl_c() => {},
+            result = tokio::signal::ctrl_c() => result?,
             _ = term.recv() => {},
         }
     }
 
     #[cfg(not(unix))]
     {
-        let _ = tokio::signal::ctrl_c().await;
+        tokio::signal::ctrl_c().await?;
     }
+
+    Ok(())
 }

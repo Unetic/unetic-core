@@ -1,5 +1,15 @@
 use serde::{Deserialize, Serialize};
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OperationIntent {
+    Wifi {
+        ssid: String,
+        encryption: String,
+        key: Option<String>,
+    },
+    Wan(crate::domain::WanDesired),
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum OperationStatus {
@@ -38,6 +48,8 @@ pub struct PublicOperation {
     pub kind: String,
     pub status: OperationStatus,
     pub requested_ssid: String,
+    #[serde(skip)]
+    pub intent: Option<OperationIntent>,
     pub error: Option<crate::domain::errors::LegacyAppError>,
 }
 
@@ -50,6 +62,8 @@ pub struct LastOperation {
     pub status: OperationStatus,
     pub revision: u64,
     pub requested_ssid: String,
+    #[serde(skip)]
+    pub intent: Option<OperationIntent>,
     pub error: Option<crate::domain::errors::LegacyAppError>,
     pub finished_at_ms: u64,
 }
