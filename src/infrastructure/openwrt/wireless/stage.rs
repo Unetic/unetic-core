@@ -1,5 +1,6 @@
 use crate::domain::{
     errors::{ErrorCode, ErrorStage, LegacyAppError},
+    roaming::RoamingConfig,
     wifi::WifiNetworkConfig,
 };
 use crate::infrastructure::openwrt::rpc::call_ubus;
@@ -9,30 +10,24 @@ pub fn stage_wifi_config(
     session: &str,
     targets: &[String],
     config: &WifiNetworkConfig,
+    roaming: RoamingConfig,
     is_extender: bool,
 ) -> Result<(), LegacyAppError> {
+    let applied =
+        crate::domain::compile_applied_roaming(roaming, &config.ssid, &config.encryption, targets);
+
     for target in targets {
         let mut values = serde_json::Map::new();
         values.insert("ssid".into(), json!(config.ssid));
         values.insert("encryption".into(), json!(config.encryption));
+        values.extend(super::ap_roaming::build_values(
+            applied
+                .access_points
+                .get(target)
+                .expect("compiler returns every target"),
+        ));
 
-        // Inject 802.11r/k/v options
-        values.insert("ieee80211k".into(), json!("1"));
-        values.insert("ieee80211v".into(), json!("1"));
-        values.insert("bss_transition".into(), json!("1"));
-        values.insert("wnm_sleep_mode".into(), json!("1"));
-        values.insert("ieee80211r".into(), json!("1"));
-        values.insert("ft_over_ds".into(), json!("1"));
-        values.insert("ft_psk_generate_local".into(), json!("1"));
-
-        let md = format!(
-            "{:04x}",
-            config
-                .ssid
-                .bytes()
-                .fold(0u16, |acc, b| acc.wrapping_add(b as u16))
-        );
-        values.insert("mobility_domain".into(), json!(md));
+        super::ap_roaming::delete_conflicting_options(session, target)?;
 
         if config.encryption != "none"
             && let Some(key) = &config.key
@@ -70,51 +65,69 @@ pub fn stage_wifi_config(
         }
     }
 
-    if is_extender && !targets.is_empty() {
-        let mut backhaul_values = serde_json::Map::new();
-        backhaul_values.insert("device".into(), json!(targets[0]));
-        backhaul_values.insert("mode".into(), json!("sta"));
-        backhaul_values.insert("network".into(), json!("lan"));
-        backhaul_values.insert("wds".into(), json!("1"));
-        backhaul_values.insert("ssid".into(), json!(config.ssid));
-        backhaul_values.insert("encryption".into(), json!(config.encryption));
-        if config.encryption != "none" {
-            if let Some(key) = &config.key {
+    super::usteer_stage::stage_usteer_config(session, &config.ssid, &applied.policy)?;
+
+    if is_extender {
+        let is_wireless = crate::infrastructure::openwrt::network::is_wireless_uplink();
+        if is_wireless && targets.len() >= 2 {
+            let backhaul_target = &targets[1];
+            let mut backhaul_values = serde_json::Map::new();
+            backhaul_values.insert("device".into(), json!(backhaul_target));
+            backhaul_values.insert("mode".into(), json!("sta"));
+            backhaul_values.insert("network".into(), json!("lan"));
+            backhaul_values.insert("wds".into(), json!("1"));
+            backhaul_values.insert("hidden".into(), json!("1"));
+            backhaul_values.insert("ssid".into(), json!(format!("{}_backhaul", config.ssid)));
+            backhaul_values.insert("encryption".into(), json!(config.encryption));
+            if config.encryption != "none"
+                && let Some(key) = &config.key
+            {
                 backhaul_values.insert("key".into(), json!(key));
             }
-        }
 
-        let update_res = call_ubus(
-            "uci",
-            "set",
-            json!({
-                "config": "wireless",
-                "section": "mesh_backhaul",
-                "values": backhaul_values.clone(),
-                "ubus_rpc_session": session
-            }),
-        );
-
-        if update_res.is_err() {
-            call_ubus(
+            let update_res = call_ubus(
                 "uci",
                 "set",
                 json!({
                     "config": "wireless",
                     "section": "mesh_backhaul",
-                    "type": "wifi-iface",
-                    "values": backhaul_values,
+                    "values": backhaul_values.clone(),
                     "ubus_rpc_session": session
                 }),
-            )
-            .map(|_| ())
-            .map_err(|error| {
-                LegacyAppError::new(ErrorCode::UciStageFailed, ErrorStage::Stage, error.message)
-                    .retryable(error.retryable)
-            })?;
-        }
+            );
 
-        crate::infrastructure::openwrt::network::stage_stp(session)?;
+            if update_res.is_err() {
+                call_ubus(
+                    "uci",
+                    "set",
+                    json!({
+                        "config": "wireless",
+                        "section": "mesh_backhaul",
+                        "type": "wifi-iface",
+                        "values": backhaul_values,
+                        "ubus_rpc_session": session
+                    }),
+                )
+                .map(|_| ())
+                .map_err(|error| {
+                    LegacyAppError::new(ErrorCode::UciStageFailed, ErrorStage::Stage, error.message)
+                        .retryable(error.retryable)
+                })?;
+            }
+
+            crate::infrastructure::openwrt::network::stage_stp(session)?;
+        } else {
+            // Wired backhaul or single radio on extender: remove any stale wireless backhaul STA
+            let _ = call_ubus(
+                "uci",
+                "delete",
+                json!({
+                    "config": "wireless",
+                    "section": "mesh_backhaul",
+                    "ubus_rpc_session": session
+                }),
+            );
+        }
     }
 
     Ok(())

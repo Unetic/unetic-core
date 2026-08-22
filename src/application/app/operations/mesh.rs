@@ -58,21 +58,30 @@ impl App {
     pub(crate) fn apply_master_wifi_config(
         &self,
         mut config: WifiNetworkConfig,
+        roaming: Option<crate::domain::RoamingConfig>,
     ) -> Result<(), LegacyAppError> {
-        let current = {
+        let (current, current_roaming) = {
             let inner = self.inner.lock().expect("app state poisoned");
-            inner.config.wifi.primary.clone()
+            (inner.config.wifi.primary.clone(), inner.config.wifi.roaming)
         };
         config.targets = current.targets.clone();
-        if config == current {
+        let roaming = roaming.unwrap_or(current_roaming);
+        if config == current && roaming == current_roaming {
             return Ok(());
         }
 
-        force_state_sync(self, &config.targets, &config, OperationSource::Reconcile)?;
+        force_state_sync(
+            self,
+            &config.targets,
+            &config,
+            roaming,
+            OperationSource::Reconcile,
+        )?;
 
         let mut inner = self.inner.lock().expect("app state poisoned");
         let mut desired = inner.config.clone();
         desired.wifi.primary = config;
+        desired.wifi.roaming = roaming;
         desired.revision = desired.revision.saturating_add(1);
         self.store.persist_config(&desired)?;
         inner.config = desired;
@@ -124,5 +133,32 @@ mod tests {
             app.take_approved_pairing_token("aa:bb:cc:dd:ee:ff", "secret")
                 .is_none()
         );
+    }
+
+    #[test]
+    fn extender_applies_master_roaming_profile() {
+        let backend = Arc::new(MemoryBackend::new("Home", &["radio0", "radio1"]));
+        let (events, _) = tokio::sync::broadcast::channel(16);
+        let state_dir =
+            std::env::temp_dir().join(format!("unetic-mesh-roaming-{}", uuid::Uuid::new_v4()));
+        let app = App::bootstrap(backend.clone(), StateStore::new(state_dir), events);
+        let roaming = crate::domain::RoamingConfig {
+            mode: crate::domain::RoamingMode::Aggressive,
+            sensitivity: crate::domain::RoamingSensitivity::High,
+        };
+
+        app.apply_master_wifi_config(
+            crate::domain::WifiNetworkConfig {
+                ssid: "Mesh Home".into(),
+                encryption: "none".into(),
+                key: None,
+                targets: Vec::new(),
+            },
+            Some(roaming),
+        )
+        .expect("master config applied");
+
+        assert_eq!(app.state().wifi.roaming, roaming);
+        assert_eq!(backend.committed_roaming(), roaming);
     }
 }

@@ -58,6 +58,8 @@ pub(crate) struct Inner {
     pub maintenance_exiting: bool,
     pub maintenance_reason: Option<String>,
     pub observed_configs: BTreeMap<String, crate::domain::WifiNetworkConfig>,
+    pub observed_roaming: Option<crate::domain::AppliedRoamingConfig>,
+    pub roaming_runtime: crate::domain::RoamingRuntime,
     pub runtime_healthy: bool,
     pub wan: crate::domain::WanPublicState,
     pub active_operation: Option<PublicOperation>,
@@ -130,6 +132,8 @@ impl App {
                 maintenance_exiting: false,
                 maintenance_reason: None,
                 observed_configs: BTreeMap::new(),
+                observed_roaming: None,
+                roaming_runtime: Default::default(),
                 runtime_healthy: false,
                 wan: wan_status,
                 active_operation: None,
@@ -195,6 +199,15 @@ impl App {
 
     pub fn wifi_get(&self) -> WifiPublicState {
         self.state().wifi
+    }
+
+    pub fn wan_config(&self) -> crate::domain::WanDesired {
+        self.inner
+            .lock()
+            .expect("app state poisoned")
+            .config
+            .wan
+            .clone()
     }
 
     pub fn last_or_active_operation(&self) -> serde_json::Value {

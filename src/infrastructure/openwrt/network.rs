@@ -19,6 +19,39 @@ pub fn default_gateway() -> Option<String> {
         .map(|gateway| (*gateway).to_owned())
 }
 
+pub fn is_wireless_uplink() -> bool {
+    let Ok(output) = std::process::Command::new("ip")
+        .args(["route", "show", "default"])
+        .output()
+    else {
+        return false;
+    };
+    if !output.status.success() {
+        return false;
+    }
+    let Ok(stdout) = String::from_utf8(output.stdout) else {
+        return false;
+    };
+    let Some(first_line) = stdout.lines().next() else {
+        return false;
+    };
+    let fields: Vec<&str> = first_line.split_whitespace().collect();
+    let Some(dev_index) = fields
+        .iter()
+        .position(|field| *field == "dev")
+        .map(|idx| idx + 1)
+    else {
+        return false;
+    };
+    let Some(dev) = fields.get(dev_index) else {
+        return false;
+    };
+    dev.starts_with("wlan")
+        || dev.starts_with("mesh")
+        || dev.starts_with("phy")
+        || std::path::Path::new(&format!("/sys/class/net/{}/wireless", dev)).exists()
+}
+
 pub fn stage_stp(session: &str) -> Result<(), LegacyAppError> {
     call_ubus(
         "uci",

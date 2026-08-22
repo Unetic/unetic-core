@@ -6,6 +6,7 @@ pub enum OperationIntent {
         ssid: String,
         encryption: String,
         key: Option<String>,
+        roaming: crate::domain::RoamingConfig,
     },
     Wan(crate::domain::WanDesired),
 }
@@ -31,6 +32,14 @@ pub enum OperationSource {
     User,
     Reconcile,
     Recovery,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum TransactionKind {
+    #[default]
+    Wifi,
+    Wan,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -76,6 +85,8 @@ pub struct TransactionJournal {
     pub source: OperationSource,
     pub base_revision: u64,
     pub target_revision: u64,
+    #[serde(default)]
+    pub kind: TransactionKind,
     pub old_ssid: String,
     pub new_ssid: String,
     #[serde(default = "crate::domain::wifi::default_wifi_encryption")]
@@ -86,6 +97,14 @@ pub struct TransactionJournal {
     pub old_key: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub new_key: Option<String>,
+    #[serde(default)]
+    pub old_roaming: crate::domain::RoamingConfig,
+    #[serde(default)]
+    pub new_roaming: crate::domain::RoamingConfig,
     pub targets: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub old_wan: Option<crate::domain::WanDesired>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub new_wan: Option<crate::domain::WanDesired>,
     pub phase: OperationStatus,
 }

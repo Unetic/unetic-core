@@ -3,13 +3,14 @@ use std::{thread, time::Instant};
 use crate::{
     application::app::App,
     domain::errors::{ErrorCode, ErrorStage, LegacyAppError},
-    domain::{OperationSource, WifiNetworkConfig},
+    domain::{OperationSource, RoamingConfig, RoamingRuntimeStatus, WifiNetworkConfig},
 };
 
 pub fn verify(
     app: &App,
     targets: &[String],
     expected: &WifiNetworkConfig,
+    roaming: RoamingConfig,
     timeout: std::time::Duration,
 ) -> Result<(), LegacyAppError> {
     let deadline = Instant::now() + timeout;
@@ -27,8 +28,24 @@ pub fn verify(
                     })
                 }) =>
             {
+                let expected_roaming = crate::domain::compile_applied_roaming(
+                    roaming,
+                    &expected.ssid,
+                    &expected.encryption,
+                    targets,
+                );
+                let config_ready = app
+                    .backend
+                    .read_roaming_config(targets, None)
+                    .is_ok_and(|observed| observed == expected_roaming);
+                let roaming_runtime =
+                    app.backend
+                        .read_roaming_runtime(targets, &expected.ssid, roaming);
                 match app.backend.runtime_healthy(targets, &expected.ssid) {
-                    Ok(true) => {
+                    Ok(true)
+                        if config_ready
+                            && roaming_runtime.status == RoamingRuntimeStatus::Ready =>
+                    {
                         successful_samples += 1;
                         if successful_samples >= 2 {
                             return Ok(());
@@ -37,6 +54,12 @@ pub fn verify(
                     Ok(false) => {
                         successful_samples = 0;
                         last_reason = "wireless runtime is not healthy".into();
+                    }
+                    Ok(true) => {
+                        successful_samples = 0;
+                        last_reason = roaming_runtime.error.unwrap_or_else(|| {
+                            "wireless or usteer roaming state is not converged".into()
+                        });
                     }
                     Err(error) => {
                         successful_samples = 0;
@@ -69,6 +92,7 @@ pub fn force_state_sync(
     app: &App,
     targets: &[String],
     config: &WifiNetworkConfig,
+    roaming: RoamingConfig,
     _source: OperationSource,
 ) -> Result<(), LegacyAppError> {
     if targets.is_empty() {
@@ -84,9 +108,9 @@ pub fn force_state_sync(
         let inner = app.inner.lock().unwrap();
         inner.config.wan.proto == crate::domain::WanProtocol::Extender
     };
-    if let Err(error) = app
-        .backend
-        .stage_wifi_config(&session.id, targets, config, is_extender)
+    if let Err(error) =
+        app.backend
+            .stage_wifi_config(&session.id, targets, config, roaming, is_extender)
     {
         let _ = app.backend.revert_staged(&session.id);
         return Err(error);
@@ -111,6 +135,20 @@ pub fn force_state_sync(
             "recovery stage did not match desired state",
         ));
     }
+    let expected_roaming =
+        crate::domain::compile_applied_roaming(roaming, &config.ssid, &config.encryption, targets);
+    if app
+        .backend
+        .read_roaming_config(targets, Some(&session.id))?
+        != expected_roaming
+    {
+        let _ = app.backend.revert_staged(&session.id);
+        return Err(LegacyAppError::new(
+            ErrorCode::UciStageMismatch,
+            ErrorStage::Reconcile,
+            "recovery roaming stage did not match desired state",
+        ));
+    }
 
     if let Err(error) = app
         .backend
@@ -120,7 +158,7 @@ pub fn force_state_sync(
         let _ = app.backend.revert_staged(&session.id);
         return Err(error);
     }
-    if let Err(error) = verify(app, targets, config, app.timing.verify_timeout) {
+    if let Err(error) = verify(app, targets, config, roaming, app.timing.verify_timeout) {
         let _ = app.backend.rollback(&session.id);
         return Err(error);
     }
@@ -129,12 +167,13 @@ pub fn force_state_sync(
 }
 
 pub fn run_recovery_sync(app: &App, source: OperationSource) -> Result<(), LegacyAppError> {
-    let (targets, wifi) = {
+    let (targets, wifi, roaming) = {
         let inner = app.inner.lock().expect("app state poisoned");
         (
             inner.config.wifi.primary.targets.clone(),
             inner.config.wifi.primary.clone(),
+            inner.config.wifi.roaming,
         )
     };
-    force_state_sync(app, &targets, &wifi, source)
+    force_state_sync(app, &targets, &wifi, roaming, source)
 }

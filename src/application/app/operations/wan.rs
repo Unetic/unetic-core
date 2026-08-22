@@ -144,6 +144,36 @@ impl App {
         }
         self.publish();
     }
+
+    pub(crate) fn record_recovered_wan_operation(
+        &self,
+        journal: &crate::domain::TransactionJournal,
+        new_wan: &crate::domain::WanDesired,
+        status: OperationStatus,
+        revision: u64,
+        error: Option<LegacyAppError>,
+    ) {
+        if journal.source != OperationSource::User {
+            return;
+        }
+
+        let last = LastOperation {
+            id: journal.operation_id.clone(),
+            request_id: Some(journal.request_id.clone()),
+            source: OperationSource::User,
+            kind: "wan.set_config".into(),
+            status,
+            revision,
+            requested_ssid: String::new(),
+            intent: Some(OperationIntent::Wan(new_wan.clone())),
+            error,
+            finished_at_ms: now_ms(),
+        };
+        self.inner
+            .lock()
+            .expect("app state poisoned")
+            .last_user_operation = Some(last);
+    }
 }
 
 fn make_wan_last_op(

@@ -2,7 +2,10 @@ use std::collections::BTreeMap;
 
 use crate::{
     domain::errors::LegacyAppError,
-    domain::{DiscoveredWan, DiscoveredWifi, WanDesired, WanPublicState, WifiNetworkConfig},
+    domain::{
+        AppliedRoamingConfig, DiscoveredWan, DiscoveredWifi, RoamingConfig, RoamingRuntime,
+        WanDesired, WanPublicState, WifiNetworkConfig,
+    },
 };
 
 pub mod memory;
@@ -23,8 +26,20 @@ pub trait RouterBackend: Send + Sync {
         session: &str,
         targets: &[String],
         config: &WifiNetworkConfig,
+        roaming: RoamingConfig,
         is_extender: bool,
     ) -> Result<(), LegacyAppError>;
+    fn read_roaming_config(
+        &self,
+        targets: &[String],
+        session: Option<&str>,
+    ) -> Result<AppliedRoamingConfig, LegacyAppError>;
+    fn read_roaming_runtime(
+        &self,
+        targets: &[String],
+        ssid: &str,
+        roaming: RoamingConfig,
+    ) -> RoamingRuntime;
     fn read_wan_config(&self, session: Option<&str>) -> Result<WanDesired, LegacyAppError>;
     fn stage_wan_config(&self, session: &str, config: &WanDesired) -> Result<(), LegacyAppError>;
     fn read_wan_runtime_status(&self) -> Result<WanPublicState, LegacyAppError>;

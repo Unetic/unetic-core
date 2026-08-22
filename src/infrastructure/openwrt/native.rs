@@ -5,7 +5,10 @@ use serde_json::json;
 use super::{rpc, wan, wireless};
 use crate::{
     domain::errors::{ErrorCode, ErrorStage, LegacyAppError},
-    domain::{DiscoveredWan, DiscoveredWifi, WanDesired, WanPublicState, WifiNetworkConfig},
+    domain::{
+        AppliedRoamingConfig, DiscoveredWan, DiscoveredWifi, RoamingConfig, RoamingRuntime,
+        WanDesired, WanPublicState, WifiNetworkConfig,
+    },
     infrastructure::backend::RouterBackend,
 };
 
@@ -43,9 +46,27 @@ impl RouterBackend for OpenWrtBackend {
         session: &str,
         targets: &[String],
         config: &WifiNetworkConfig,
+        roaming: RoamingConfig,
         is_extender: bool,
     ) -> Result<(), LegacyAppError> {
-        wireless::stage_wifi_config(session, targets, config, is_extender)
+        wireless::stage_wifi_config(session, targets, config, roaming, is_extender)
+    }
+
+    fn read_roaming_config(
+        &self,
+        targets: &[String],
+        session: Option<&str>,
+    ) -> Result<AppliedRoamingConfig, LegacyAppError> {
+        wireless::roaming::read_roaming_config(targets, session)
+    }
+
+    fn read_roaming_runtime(
+        &self,
+        targets: &[String],
+        ssid: &str,
+        roaming: RoamingConfig,
+    ) -> RoamingRuntime {
+        wireless::usteer_runtime::read(targets, ssid, roaming)
     }
 
     fn discover_primary_wan(&self) -> Result<DiscoveredWan, LegacyAppError> {
@@ -58,43 +79,34 @@ impl RouterBackend for OpenWrtBackend {
             },
             Err(error) => return Err(error),
         };
-        wan.qos = super::qos::read_sqm_config();
+        wan.qos = super::qos::read_sqm_config(None)?;
         Ok(wan)
     }
 
     fn read_wan_config(&self, session: Option<&str>) -> Result<WanDesired, LegacyAppError> {
         let mut wan = match rpc::uci_get_config("network", Some("wan"), None, session) {
             Ok(res) => wan::parse_discovered_wan(&res).to_desired(),
-            Err(error) if error.code == ErrorCode::UciReadFailed => WanDesired::default(),
+            Err(error) if error.code == ErrorCode::UciReadFailed => WanDesired {
+                present: false,
+                proto: crate::domain::WanProtocol::None,
+                ..WanDesired::default()
+            },
             Err(error) => return Err(error),
         };
-        wan.qos = super::qos::read_sqm_config();
+        wan.qos = super::qos::read_sqm_config(session)?;
         Ok(wan)
     }
 
     fn stage_wan_config(&self, session: &str, config: &WanDesired) -> Result<(), LegacyAppError> {
-        let values = crate::infrastructure::openwrt::wan::build_wan_staging_values(config);
-        rpc::call_ubus(
-            "uci",
-            "set",
-            json!({
-                "config": "network",
-                "section": "wan",
-                "values": values,
-                "ubus_rpc_session": session
-            }),
-        )
-        .map(|_| ())
-        .map_err(|error| {
-            LegacyAppError::new(ErrorCode::UciStageFailed, ErrorStage::Stage, error.message)
-                .retryable(error.retryable)
-        })?;
-
-        if config.proto != crate::domain::WanProtocol::Extender {
-            super::qos::write_sqm_config(config.device.as_deref(), &config.qos)?;
+        let qos = if config.proto == crate::domain::WanProtocol::Extender {
+            None
         } else {
-            super::qos::write_sqm_config(None, &None)?;
-        }
+            config.qos.as_ref()
+        };
+        let interface = self.resolve_sqm_interface(session, config, qos)?;
+
+        wan::replace_wan_section(session, config)?;
+        super::qos::stage_sqm_config(session, interface.as_deref(), qos)?;
 
         Ok(())
     }
@@ -102,39 +114,44 @@ impl RouterBackend for OpenWrtBackend {
     fn read_wan_runtime_status(&self) -> Result<WanPublicState, LegacyAppError> {
         let mut status = match rpc::call_ubus("network.interface.wan", "status", json!({})) {
             Ok(res) => wan::parse_wan_runtime_status(&res),
-            Err(_) => {
-                return Ok(WanPublicState {
-                    present: false,
-                    proto: crate::domain::WanProtocol::None,
-                    status: crate::domain::WanStatus::NotConfigured,
-                    ..Default::default()
-                });
-            }
+            Err(error) if error.code == ErrorCode::NotFound => WanPublicState {
+                present: false,
+                proto: crate::domain::WanProtocol::None,
+                status: crate::domain::WanStatus::NotConfigured,
+                ..Default::default()
+            },
+            Err(error) => return Err(error),
         };
-        status.qos = super::qos::read_sqm_config();
+        status.qos = super::qos::read_sqm_config(None)?;
         Ok(status)
     }
 
     fn revert_staged(&self, session: &str) -> Result<(), LegacyAppError> {
-        let _ = rpc::call_ubus(
-            "uci",
-            "revert",
-            json!({"config": "network", "ubus_rpc_session": session}),
-        );
-        rpc::call_ubus(
-            "uci",
-            "revert",
-            json!({"config": "wireless", "ubus_rpc_session": session}),
+        let mut failures = Vec::new();
+        let mut retryable = false;
+        for config in ["network", "sqm", "wireless", "usteer"] {
+            if let Err(error) = rpc::call_ubus(
+                "uci",
+                "revert",
+                json!({"config": config, "ubus_rpc_session": session}),
+            ) {
+                retryable |= error.retryable;
+                failures.push(format!("{config}: {}", error.message));
+            }
+        }
+
+        if failures.is_empty() {
+            return Ok(());
+        }
+        Err(LegacyAppError::new(
+            ErrorCode::UciStageFailed,
+            ErrorStage::Rollback,
+            format!(
+                "failed to revert staged UCI changes: {}",
+                failures.join("; ")
+            ),
         )
-        .map(|_| ())
-        .map_err(|error| {
-            LegacyAppError::new(
-                ErrorCode::UciStageFailed,
-                ErrorStage::Rollback,
-                format!("failed to revert staged UCI changes: {}", error.message),
-            )
-            .retryable(error.retryable)
-        })
+        .retryable(retryable))
     }
 
     fn apply(&self, session: &str, rollback_timeout_secs: u32) -> Result<(), LegacyAppError> {
@@ -240,5 +257,46 @@ impl RouterBackend for OpenWrtBackend {
     }
     fn write_dns_config(&self, cfg: &crate::domain::DnsConfig) -> Result<(), LegacyAppError> {
         super::dns::write_dns_config(cfg)
+    }
+}
+
+impl OpenWrtBackend {
+    fn resolve_sqm_interface(
+        &self,
+        session: &str,
+        config: &crate::domain::WanDesired,
+        qos: Option<&crate::domain::WanQos>,
+    ) -> Result<Option<String>, LegacyAppError> {
+        if qos.is_none() {
+            return Ok(None);
+        }
+        if config.proto == crate::domain::WanProtocol::Pppoe {
+            return Ok(Some("pppoe-wan".into()));
+        }
+        if let Some(device) = &config.device {
+            return Ok(Some(device.clone()));
+        }
+
+        if let Ok(staged) = rpc::uci_get_config("network", Some("wan"), None, Some(session)) {
+            let device = wan::parse_discovered_wan(&staged).device;
+            if device.is_some() {
+                return Ok(device);
+            }
+        }
+
+        let status = rpc::call_ubus("network.interface.wan", "status", json!({}))?;
+        let device = status
+            .get("l3_device")
+            .or_else(|| status.get("device"))
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned)
+            .ok_or_else(|| {
+                LegacyAppError::new(
+                    ErrorCode::InvalidArgument,
+                    ErrorStage::Stage,
+                    "cannot enable QoS before the WAN device is known",
+                )
+            })?;
+        Ok(Some(device))
     }
 }

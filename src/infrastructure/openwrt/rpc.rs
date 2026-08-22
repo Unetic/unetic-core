@@ -4,6 +4,8 @@ use serde_json::{Map, Value, json};
 
 use crate::domain::errors::{ErrorCode, ErrorStage, LegacyAppError};
 
+const UBUS_STATUS_NOT_FOUND: i32 = 4;
+
 pub fn call_ubus(object: &str, method: &str, request: Value) -> Result<Value, LegacyAppError> {
     let payload = serde_json::to_string(&request).map_err(|error| {
         LegacyAppError::new(
@@ -23,19 +25,9 @@ pub fn call_ubus(object: &str, method: &str, request: Value) -> Result<Value, Le
         .retryable(true)
     })?;
 
-    let response = connection.call(object, method, &payload).map_err(|error| {
-        let code = if object == "session" {
-            ErrorCode::RpcdSessionLost
-        } else {
-            ErrorCode::UbusUnavailable
-        };
-        LegacyAppError::new(
-            code,
-            ErrorStage::Transport,
-            format!("ubus {object}.{method} failed: {error}"),
-        )
-        .retryable(true)
-    })?;
+    let response = connection
+        .call(object, method, &payload)
+        .map_err(|error| map_call_error(object, method, error))?;
 
     serde_json::from_str(&response).map_err(|error| {
         LegacyAppError::new(
@@ -70,7 +62,11 @@ pub fn create_rpcd_session() -> Result<String, LegacyAppError> {
                 ["wireless", "read"],
                 ["wireless", "write"],
                 ["network", "read"],
-                ["network", "write"]
+                ["network", "write"],
+                ["sqm", "read"],
+                ["sqm", "write"],
+                ["usteer", "read"],
+                ["usteer", "write"]
             ]
         }),
     )?;
@@ -106,7 +102,52 @@ pub fn uci_get_config(
         request.insert("ubus_rpc_session".into(), Value::String(session.to_owned()));
     }
     call_ubus("uci", "get", Value::Object(request)).map_err(|error| {
+        if error.code != ErrorCode::NotFound {
+            return error;
+        }
         LegacyAppError::new(ErrorCode::UciReadFailed, ErrorStage::Verify, error.message)
-            .retryable(error.retryable)
     })
+}
+
+fn map_call_error(object: &str, method: &str, error: ubus::UbusError) -> LegacyAppError {
+    if matches!(error, ubus::UbusError::Status(UBUS_STATUS_NOT_FOUND)) {
+        return LegacyAppError::new(
+            ErrorCode::NotFound,
+            ErrorStage::Transport,
+            format!("ubus {object}.{method} failed: {error}"),
+        );
+    }
+
+    let code = if object == "session" {
+        ErrorCode::RpcdSessionLost
+    } else {
+        ErrorCode::UbusUnavailable
+    };
+    LegacyAppError::new(
+        code,
+        ErrorStage::Transport,
+        format!("ubus {object}.{method} failed: {error}"),
+    )
+    .retryable(true)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn preserves_ubus_not_found_for_optional_uci_sections() {
+        let error = map_call_error("uci", "get", ubus::UbusError::Status(4));
+
+        assert_eq!(error.code, ErrorCode::NotFound);
+        assert!(!error.retryable);
+    }
+
+    #[test]
+    fn transport_failures_are_not_reported_as_missing_sections() {
+        let error = map_call_error("uci", "get", ubus::UbusError::InvalidData("invalid reply"));
+
+        assert_eq!(error.code, ErrorCode::UbusUnavailable);
+        assert!(error.retryable);
+    }
 }

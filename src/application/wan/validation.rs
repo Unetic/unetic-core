@@ -5,6 +5,9 @@ use crate::{
     domain::{SetWanRequest, WanDesired, WanProtocol},
 };
 
+mod qos;
+use self::qos::validate_qos;
+
 pub fn validate_wan_request(request: &SetWanRequest) -> Result<(), LegacyAppError> {
     if request.request_id.trim().is_empty() || request.request_id.len() > 128 {
         return Err(LegacyAppError::new(
@@ -17,6 +20,10 @@ pub fn validate_wan_request(request: &SetWanRequest) -> Result<(), LegacyAppErro
 }
 
 pub fn validate_wan_desired(desired: &WanDesired) -> Result<(), LegacyAppError> {
+    if let Some(qos) = &desired.qos {
+        validate_qos(qos, desired.present, desired.proto)?;
+    }
+
     if !desired.present {
         return Ok(());
     }
@@ -62,54 +69,6 @@ pub fn validate_wan_desired(desired: &WanDesired) -> Result<(), LegacyAppError> 
 
     for dns in &desired.custom_dns {
         validate_ipv4(dns, "custom DNS")?;
-    }
-
-    if let Some(qos) = &desired.qos {
-        validate_qos(qos, desired.proto)?;
-    }
-
-    Ok(())
-}
-
-fn validate_qos(qos: &crate::domain::WanQos, proto: WanProtocol) -> Result<(), LegacyAppError> {
-    if !qos.enabled {
-        return Ok(());
-    }
-
-    if proto == WanProtocol::Extender {
-        return Err(LegacyAppError::new(
-            ErrorCode::InvalidArgument,
-            ErrorStage::Validate,
-            "QoS cannot be enabled on WAN in extender mode (master only)",
-        ));
-    }
-
-    if qos.download_kbps.is_none() && qos.upload_kbps.is_none() {
-        return Err(LegacyAppError::new(
-            ErrorCode::InvalidArgument,
-            ErrorStage::Validate,
-            "At least one bandwidth limit (download or upload) must be specified when QoS is enabled",
-        ));
-    }
-
-    if let Some(download) = qos.download_kbps {
-        if download == 0 || download > 10_000_000 {
-            return Err(LegacyAppError::new(
-                ErrorCode::InvalidArgument,
-                ErrorStage::Validate,
-                "QoS download bandwidth limit must be between 1 and 10000000 kbps",
-            ));
-        }
-    }
-
-    if let Some(upload) = qos.upload_kbps {
-        if upload == 0 || upload > 10_000_000 {
-            return Err(LegacyAppError::new(
-                ErrorCode::InvalidArgument,
-                ErrorStage::Validate,
-                "QoS upload bandwidth limit must be between 1 and 10000000 kbps",
-            ));
-        }
     }
 
     Ok(())
@@ -321,5 +280,13 @@ mod tests {
             ..Default::default()
         };
         assert!(validate_wan_desired(&invalid_bw).is_err());
+
+        let disabled_wan = WanDesired {
+            present: false,
+            proto: WanProtocol::None,
+            qos: master_qos.qos,
+            ..Default::default()
+        };
+        assert!(validate_wan_desired(&disabled_wan).is_err());
     }
 }

@@ -5,6 +5,9 @@ use crate::domain::{
     WanStatus,
 };
 
+mod stage;
+pub use stage::replace_wan_section;
+
 pub fn parse_discovered_wan(value: &Value) -> DiscoveredWan {
     let Some(values) = value.get("values").and_then(Value::as_object) else {
         return DiscoveredWan {
@@ -37,7 +40,11 @@ pub fn parse_discovered_wan(value: &Value) -> DiscoveredWan {
         .map(str::to_owned);
     let custom_mtu = values
         .get("mtu")
-        .and_then(Value::as_u64)
+        .and_then(|value| {
+            value
+                .as_u64()
+                .or_else(|| value.as_str()?.parse::<u64>().ok())
+        })
         .and_then(|v| u16::try_from(v).ok());
     let custom_dns = parse_dns_list(values.get("dns"));
 
@@ -116,7 +123,7 @@ pub fn build_wan_staging_values(config: &WanDesired) -> Value {
     }
 
     match config.proto {
-        WanProtocol::Dhcp => {
+        WanProtocol::Dhcp | WanProtocol::Extender => {
             map.insert("proto".into(), Value::String("dhcp".into()));
             if !config.custom_dns.is_empty() {
                 map.insert("peerdns".into(), Value::String("0".into()));
@@ -158,9 +165,6 @@ pub fn build_wan_staging_values(config: &WanDesired) -> Value {
                     map.insert("service".into(), Value::String(svc.clone()));
                 }
             }
-        }
-        WanProtocol::Extender => {
-            map.insert("proto".into(), Value::String("dhcp".into()));
         }
         WanProtocol::None => {
             map.insert("proto".into(), Value::String("none".into()));

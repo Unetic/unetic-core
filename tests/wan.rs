@@ -49,6 +49,20 @@ fn wait_for_idle(app: &App) {
 }
 
 #[test]
+fn test_api_get_wan_config_returns_desired_config() {
+    let app = test_app();
+    let response = api::dispatch(
+        &app,
+        "wan.get_config",
+        r#"{"idempotence_token":"read-wan"}"#,
+    );
+    let value: serde_json::Value = serde_json::from_str(&response).expect("valid JSON response");
+
+    assert_eq!(value["error"], 0);
+    assert_eq!(value["result"]["proto"], "dhcp");
+}
+
+#[test]
 fn test_extender_protocol_serialization() {
     let proto = WanProtocol::Extender;
     let json_val = serde_json::to_value(proto).expect("serialize");
@@ -65,7 +79,7 @@ fn test_openwrt_parse_discovered_wan_extender() {
             "proto": "extender",
             "device": "eth1",
             "macaddr": "00:11:22:33:44:55",
-            "mtu": 1500
+            "mtu": "1500"
         }
     });
 
@@ -85,6 +99,7 @@ fn test_openwrt_build_wan_staging_values_extender() {
         proto: WanProtocol::Extender,
         custom_mac: Some("aa:bb:cc:dd:ee:ff".into()),
         custom_mtu: Some(1400),
+        custom_dns: vec!["1.1.1.1".into(), "9.9.9.9".into()],
         ..WanDesired::default()
     };
 
@@ -105,6 +120,8 @@ fn test_openwrt_build_wan_staging_values_extender() {
         values.get("mtu").and_then(serde_json::Value::as_u64),
         Some(1400)
     );
+    assert_eq!(values["peerdns"], "0");
+    assert_eq!(values["dns"], json!(["1.1.1.1", "9.9.9.9"]));
 }
 
 #[test]
@@ -240,11 +257,14 @@ fn test_api_dispatch_wan_set_qos_master_success() {
     wait_for_idle(&app);
     let state = app.state();
     assert_eq!(state.revision, 2);
-    assert_eq!(state.wan.qos, Some(unetic_core::domain::WanQos {
-        enabled: true,
-        download_kbps: Some(100000),
-        upload_kbps: Some(20000),
-    }));
+    assert_eq!(
+        state.wan.qos,
+        Some(unetic_core::domain::WanQos {
+            enabled: true,
+            download_kbps: Some(100000),
+            upload_kbps: Some(20000),
+        })
+    );
 }
 
 #[test]

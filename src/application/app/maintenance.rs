@@ -72,11 +72,12 @@ impl App {
 }
 
 fn run_maintenance_exit(app: Arc<App>) {
-    let (targets, desired, base_revision) = {
+    let (targets, desired, roaming, base_revision) = {
         let inner = app.inner.lock().expect("app state poisoned");
         (
             inner.config.wifi.primary.targets.clone(),
             inner.config.wifi.primary.clone(),
+            inner.config.wifi.roaming,
             inner.config.revision,
         )
     };
@@ -88,6 +89,7 @@ fn run_maintenance_exit(app: Arc<App>) {
             &app,
             &targets,
             &desired,
+            roaming,
             crate::domain::OperationSource::Reconcile,
         )
     };

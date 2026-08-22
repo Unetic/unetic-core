@@ -25,6 +25,9 @@ impl MemoryBackend {
         session: Option<&str>,
     ) -> Result<WanDesired, LegacyAppError> {
         let state = self.state.lock().expect("memory backend poisoned");
+        if session.is_some() && state.failure.fail_wan_candidate_verify {
+            return Ok(state.wan_committed.clone());
+        }
         if let Some(session) = session
             && let Some(staged) = state.wan_sessions.get(session)
         {
@@ -54,6 +57,14 @@ impl MemoryBackend {
 
     pub(crate) fn mem_read_wan_runtime_status(&self) -> Result<WanPublicState, LegacyAppError> {
         let state = self.state.lock().expect("memory backend poisoned");
+        if state.failure.fail_wan_runtime_read {
+            return Err(LegacyAppError::new(
+                ErrorCode::UbusUnavailable,
+                ErrorStage::Transport,
+                "injected WAN runtime read failure",
+            )
+            .retryable(true));
+        }
         Ok(state.wan_runtime.clone())
     }
 }

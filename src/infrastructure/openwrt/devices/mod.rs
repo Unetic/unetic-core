@@ -3,9 +3,9 @@ mod catalog;
 use std::{collections::HashMap, fs, process::Command};
 
 use crate::{domain::device::Device, domain::errors::LegacyAppError};
-pub use catalog::{calculate_distance_m, merge_devices, parse_arp_table, parse_dhcp_leases};
+pub use catalog::{merge_devices, parse_arp_table, parse_dhcp_leases};
 
-pub fn get_wireless_clients() -> HashMap<String, (i32, f32)> {
+pub fn get_wireless_clients() -> HashMap<String, i32> {
     let mut stations = HashMap::new();
     let mut ifaces = Vec::new();
 
@@ -51,9 +51,7 @@ pub fn get_wireless_clients() -> HashMap<String, (i32, f32)> {
                     if let Some(clients) = json.get("clients").and_then(|c| c.as_object()) {
                         for (mac, info) in clients {
                             if let Some(signal) = info.get("signal").and_then(|s| s.as_i64()) {
-                                let signal_dbm = signal as i32;
-                                let distance_m = calculate_distance_m(signal_dbm);
-                                stations.insert(mac.to_ascii_lowercase(), (signal_dbm, distance_m));
+                                stations.insert(mac.to_ascii_lowercase(), signal as i32);
                             }
                         }
                     }

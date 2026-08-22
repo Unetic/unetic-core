@@ -5,62 +5,11 @@ use tracing::{error, info, warn};
 use crate::{
     application::app::App,
     domain::errors::{ErrorCode, ErrorStage, LegacyAppError},
-    domain::{
-        OperationIntent, OperationSource, OperationStatus, PublicOperation, STATE_SCHEMA_VERSION,
-        TransactionJournal, WanDesired, WanStatus,
-    },
+    domain::{OperationSource, OperationStatus, WanDesired, WanStatus},
 };
 
-#[derive(Debug, Clone)]
-pub struct WanChangeContext {
-    pub operation_id: String,
-    pub request_id: Option<String>,
-    pub source: OperationSource,
-    pub base_revision: u64,
-    pub target_revision: u64,
-    pub old_wan: WanDesired,
-    pub new_wan: WanDesired,
-}
-
-impl WanChangeContext {
-    #[must_use]
-    pub fn public(
-        &self,
-        status: OperationStatus,
-        error: Option<LegacyAppError>,
-    ) -> PublicOperation {
-        PublicOperation {
-            id: self.operation_id.clone(),
-            request_id: self.request_id.clone(),
-            source: self.source,
-            kind: "wan.set_config".into(),
-            status,
-            requested_ssid: String::new(),
-            intent: Some(OperationIntent::Wan(self.new_wan.clone())),
-            error,
-        }
-    }
-
-    #[must_use]
-    pub fn to_journal(&self, phase: OperationStatus) -> TransactionJournal {
-        TransactionJournal {
-            schema_version: STATE_SCHEMA_VERSION,
-            operation_id: self.operation_id.clone(),
-            request_id: self.request_id.clone().unwrap_or_default(),
-            source: self.source,
-            base_revision: self.base_revision,
-            target_revision: self.target_revision,
-            old_ssid: String::new(),
-            new_ssid: String::new(),
-            old_encryption: "none".into(),
-            new_encryption: "none".into(),
-            old_key: None,
-            new_key: None,
-            targets: Vec::new(),
-            phase,
-        }
-    }
-}
+mod context;
+pub use context::WanChangeContext;
 
 pub fn run_wan_change(app: Arc<App>, context: WanChangeContext) {
     let span = tracing::info_span!(
@@ -82,26 +31,23 @@ fn execute_wan(app: &Arc<App>, context: &WanChangeContext) -> Result<(), LegacyA
         |error| error.with_operation(&context.operation_id, context.request_id.as_deref()),
     )?;
 
-    if let Err(error) = stage_and_apply_wan(app, context, &session.id) {
-        let _ = app.backend.rollback(&session.id);
-        let _ = app.backend.revert_staged(&session.id);
+    if let Err(error) = stage_and_verify_wan(app, context, &session.id) {
+        let error = attach_cleanup_error(error, app.backend.revert_staged(&session.id));
         app.complete_wan_failure(context, attach(error, context), false);
         return Ok(());
     }
 
-    if let Err(error) = verify_wan_ready(app, context) {
-        let _ = app.backend.rollback(&session.id);
-        app.complete_wan_failure(context, attach(error, context), false);
+    if let Err(error) = apply_and_verify_wan(app, context, &session.id) {
+        rollback_to_old_wan(app, context, &session.id, error);
         return Ok(());
     }
 
     if let Err(error) = persist_and_confirm_wan(app, context, &session.id) {
-        let _ = app.backend.rollback(&session.id);
-        if context.source == OperationSource::User && error.code == ErrorCode::ConfirmFailed {
+        if error.code == ErrorCode::ConfirmFailed {
             app.mark_wan_commit_uncertain(context, error);
             return Ok(());
         }
-        app.complete_wan_failure(context, attach(error, context), false);
+        rollback_to_old_wan(app, context, &session.id, error);
         return Ok(());
     }
 
@@ -110,7 +56,7 @@ fn execute_wan(app: &Arc<App>, context: &WanChangeContext) -> Result<(), LegacyA
     Ok(())
 }
 
-fn stage_and_apply_wan(
+fn stage_and_verify_wan(
     app: &Arc<App>,
     context: &WanChangeContext,
     session_id: &str,
@@ -121,8 +67,14 @@ fn stage_and_apply_wan(
         OperationStatus::Staging,
         None,
     )?;
-    app.backend.stage_wan_config(session_id, &context.new_wan)?;
+    stage_wan_candidate(app, session_id, &context.new_wan)
+}
 
+fn apply_and_verify_wan(
+    app: &Arc<App>,
+    context: &WanChangeContext,
+    session_id: &str,
+) -> Result<(), LegacyAppError> {
     app.set_operation_status_with_kind(
         &context.operation_id,
         "wan.set_config",
@@ -130,7 +82,9 @@ fn stage_and_apply_wan(
         None,
     )?;
     app.backend
-        .apply(session_id, app.timing.rpcd_rollback_timeout_secs)
+        .apply(session_id, app.timing.rpcd_rollback_timeout_secs)?;
+
+    verify_wan_ready(app, context)
 }
 
 fn verify_wan_ready(app: &Arc<App>, context: &WanChangeContext) -> Result<(), LegacyAppError> {
@@ -141,26 +95,72 @@ fn verify_wan_ready(app: &Arc<App>, context: &WanChangeContext) -> Result<(), Le
         None,
     )?;
 
-    if !context.new_wan.present {
-        return Ok(());
+    let result = verify_wan_configuration(app, &context.new_wan, app.timing.verify_timeout);
+    if result.is_err() {
+        warn!("WAN verification timed out; rolling back");
+    }
+    result
+}
+
+fn rollback_to_old_wan(
+    app: &Arc<App>,
+    context: &WanChangeContext,
+    session_id: &str,
+    original_error: LegacyAppError,
+) {
+    warn!(%original_error, "rolling WAN configuration back");
+    let _ = app.set_operation_status_with_kind(
+        &context.operation_id,
+        "wan.set_config",
+        OperationStatus::RollingBack,
+        Some(original_error.clone()),
+    );
+
+    if let Err(error) = app.backend.rollback(session_id) {
+        let error = rollback_error(&original_error, "rollback failed", &error);
+        app.complete_wan_failure(context, attach(error, context), true);
+        return;
     }
 
-    let deadline = Instant::now() + app.timing.verify_timeout;
-    while Instant::now() < deadline {
-        if let Ok(st) = app.backend.read_wan_runtime_status() {
-            if matches!(st.status, WanStatus::Connected | WanStatus::Connecting) {
-                return Ok(());
-            }
-        }
-        thread::sleep(app.timing.verify_sample_delay);
+    if let Err(error) =
+        verify_wan_configuration(app, &context.old_wan, app.timing.rollback_verify_timeout)
+    {
+        let error = rollback_error(&original_error, "rollback verification failed", &error);
+        app.complete_wan_failure(context, attach(error, context), true);
+        return;
     }
 
-    warn!("WAN verification timed out; rolling back");
-    Err(LegacyAppError::new(
-        ErrorCode::VerifyTimeout,
-        ErrorStage::Verify,
-        "WAN interface did not become ready",
-    ))
+    app.complete_wan_failure(context, attach(original_error, context), false);
+}
+
+fn rollback_error(
+    original: &LegacyAppError,
+    action: &str,
+    rollback: &LegacyAppError,
+) -> LegacyAppError {
+    LegacyAppError::new(
+        ErrorCode::RollbackFailed,
+        ErrorStage::Rollback,
+        format!("{}; {action}: {}", original.message, rollback.message),
+    )
+}
+
+fn attach_cleanup_error(
+    original: LegacyAppError,
+    cleanup: Result<(), LegacyAppError>,
+) -> LegacyAppError {
+    let Err(cleanup) = cleanup else {
+        return original;
+    };
+    LegacyAppError::new(
+        original.code,
+        original.stage,
+        format!(
+            "{}; staged cleanup failed: {}",
+            original.message, cleanup.message
+        ),
+    )
+    .retryable(original.retryable || cleanup.retryable)
 }
 
 fn persist_and_confirm_wan(
@@ -198,21 +198,83 @@ pub fn force_wan_state_sync(
     _base_revision: u64,
 ) -> Result<(), LegacyAppError> {
     let session = crate::infrastructure::backend::SessionGuard::new(app.backend.as_ref())?;
-    if let Err(error) = app.backend.stage_wan_config(&session.id, desired) {
-        let _ = app.backend.revert_staged(&session.id);
+    if let Err(error) = stage_wan_candidate(app, &session.id, desired) {
+        let error = attach_cleanup_error(error, app.backend.revert_staged(&session.id));
         return Err(error);
     }
     if let Err(error) = app
         .backend
         .apply(&session.id, app.timing.rpcd_rollback_timeout_secs)
     {
-        let _ = app.backend.rollback(&session.id);
-        let _ = app.backend.revert_staged(&session.id);
-        return Err(error);
+        if let Err(rollback) = app.backend.rollback(&session.id) {
+            return Err(rollback_error(&error, "rollback failed", &rollback));
+        }
+        return Err(attach_cleanup_error(
+            error,
+            app.backend.revert_staged(&session.id),
+        ));
+    }
+    if let Err(error) = verify_wan_configuration(app, desired, app.timing.verify_timeout) {
+        return match app.backend.rollback(&session.id) {
+            Ok(()) => Err(error),
+            Err(rollback) => Err(rollback_error(&error, "rollback failed", &rollback)),
+        };
     }
     app.backend.confirm(&session.id)?;
     Ok(())
 }
 
+fn stage_wan_candidate(
+    app: &App,
+    session_id: &str,
+    desired: &WanDesired,
+) -> Result<(), LegacyAppError> {
+    app.backend.stage_wan_config(session_id, desired)?;
+    let staged = app.backend.read_wan_config(Some(session_id))?;
+    if wan_config_matches(&staged, desired) {
+        return Ok(());
+    }
+    Err(LegacyAppError::new(
+        ErrorCode::UciStageMismatch,
+        ErrorStage::Stage,
+        "staged WAN configuration does not match desired state",
+    ))
+}
+
+fn verify_wan_configuration(
+    app: &App,
+    expected: &WanDesired,
+    timeout: std::time::Duration,
+) -> Result<(), LegacyAppError> {
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        let config_matches = app
+            .backend
+            .read_wan_config(None)
+            .is_ok_and(|wan| wan_config_matches(&wan, expected));
+        if config_matches && !expected.present {
+            return Ok(());
+        }
+        if config_matches
+            && app
+                .backend
+                .read_wan_runtime_status()
+                .is_ok_and(|status| status.status == WanStatus::Connected)
+        {
+            return Ok(());
+        }
+        thread::sleep(app.timing.verify_sample_delay);
+    }
+
+    Err(LegacyAppError::new(
+        ErrorCode::VerifyTimeout,
+        ErrorStage::Verify,
+        "WAN configuration did not converge before timeout",
+    )
+    .retryable(true))
+}
+
+mod normalization;
 pub mod validation;
+pub(crate) use normalization::{normalize_wan_desired, wan_config_matches};
 pub use validation::*;

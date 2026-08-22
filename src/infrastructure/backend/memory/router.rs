@@ -4,7 +4,8 @@ use super::MemoryBackend;
 use crate::{
     domain::errors::{ErrorCode, ErrorStage, LegacyAppError},
     domain::{
-        DiscoveredWan, DiscoveredWifi, WanDesired, WanProtocol, WanPublicState, WanStatus,
+        AppliedRoamingConfig, DiscoveredWan, DiscoveredWifi, RoamingConfig, RoamingRuntime,
+        RoamingRuntimeStatus, WanDesired, WanProtocol, WanPublicState, WanStatus,
         WifiNetworkConfig,
     },
     infrastructure::backend::RouterBackend,
@@ -35,6 +36,8 @@ impl RouterBackend for MemoryBackend {
             encryption: first.encryption.clone(),
             key: first.key.clone(),
             targets: state.committed.keys().cloned().collect(),
+            backhaul: None,
+            radio_channels: Vec::new(),
         })
     }
 
@@ -48,6 +51,8 @@ impl RouterBackend for MemoryBackend {
         state.next_session += 1;
         let committed = state.committed.clone();
         state.sessions.insert(sid.clone(), committed);
+        let roaming = state.roaming_committed;
+        state.roaming_sessions.insert(sid.clone(), roaming);
         let wan_committed = state.wan_committed.clone();
         state.wan_sessions.insert(sid.clone(), wan_committed);
         Ok(sid)
@@ -58,6 +63,8 @@ impl RouterBackend for MemoryBackend {
         state.sessions.remove(session);
         state.wan_sessions.remove(session);
         state.rollback_snapshots.remove(session);
+        state.roaming_sessions.remove(session);
+        state.roaming_rollback_snapshots.remove(session);
         state.wan_rollback_snapshots.remove(session);
         Ok(())
     }
@@ -93,6 +100,7 @@ impl RouterBackend for MemoryBackend {
         session: &str,
         targets: &[String],
         config: &WifiNetworkConfig,
+        roaming: RoamingConfig,
         _is_extender: bool,
     ) -> Result<(), LegacyAppError> {
         let mut state = self.state.lock().expect("memory backend poisoned");
@@ -122,7 +130,55 @@ impl RouterBackend for MemoryBackend {
             target_config.targets = vec![target.clone()];
             staged.insert(target.clone(), target_config);
         }
+        state.roaming_sessions.insert(session.to_owned(), roaming);
         Ok(())
+    }
+
+    fn read_roaming_config(
+        &self,
+        targets: &[String],
+        session: Option<&str>,
+    ) -> Result<AppliedRoamingConfig, LegacyAppError> {
+        let state = self.state.lock().expect("memory backend poisoned");
+        let roaming = session
+            .and_then(|id| state.roaming_sessions.get(id))
+            .copied()
+            .unwrap_or(state.roaming_committed);
+        let configs = session
+            .and_then(|id| state.sessions.get(id))
+            .unwrap_or(&state.committed);
+        let first = targets
+            .first()
+            .and_then(|target| configs.get(target))
+            .ok_or_else(|| {
+                LegacyAppError::new(
+                    ErrorCode::TargetMissing,
+                    ErrorStage::Verify,
+                    "managed Wi-Fi target is missing",
+                )
+            })?;
+
+        Ok(crate::domain::compile_applied_roaming(
+            roaming,
+            &first.ssid,
+            &first.encryption,
+            targets,
+        ))
+    }
+
+    fn read_roaming_runtime(
+        &self,
+        targets: &[String],
+        _ssid: &str,
+        _roaming: RoamingConfig,
+    ) -> RoamingRuntime {
+        RoamingRuntime {
+            available: true,
+            local_bss: targets.len().try_into().unwrap_or(u32::MAX),
+            remote_bss: 0,
+            status: RoamingRuntimeStatus::Ready,
+            error: None,
+        }
     }
 
     fn read_wan_config(&self, session: Option<&str>) -> Result<WanDesired, LegacyAppError> {
@@ -141,6 +197,8 @@ impl RouterBackend for MemoryBackend {
         let mut state = self.state.lock().expect("memory backend poisoned");
         let committed = state.committed.clone();
         state.sessions.insert(session.to_owned(), committed);
+        let roaming = state.roaming_committed;
+        state.roaming_sessions.insert(session.to_owned(), roaming);
         let wan_committed = state.wan_committed.clone();
         state.wan_sessions.insert(session.to_owned(), wan_committed);
         Ok(())
@@ -166,6 +224,15 @@ impl RouterBackend for MemoryBackend {
         state
             .rollback_snapshots
             .insert(session.to_owned(), snapshot);
+        let roaming_snapshot = state.roaming_committed;
+        state
+            .roaming_rollback_snapshots
+            .insert(session.to_owned(), roaming_snapshot);
+        state.roaming_committed = state
+            .roaming_sessions
+            .get(session)
+            .copied()
+            .unwrap_or_default();
         state.committed = staged;
 
         let wan_staged = state
@@ -202,6 +269,7 @@ impl RouterBackend for MemoryBackend {
             ));
         }
         state.rollback_snapshots.remove(session);
+        state.roaming_rollback_snapshots.remove(session);
         state.wan_rollback_snapshots.remove(session);
         Ok(())
     }
@@ -218,6 +286,10 @@ impl RouterBackend for MemoryBackend {
         if let Some(snapshot) = state.rollback_snapshots.remove(session) {
             state.committed = snapshot.clone();
             state.sessions.insert(session.to_owned(), snapshot);
+        }
+        if let Some(snapshot) = state.roaming_rollback_snapshots.remove(session) {
+            state.roaming_committed = snapshot;
+            state.roaming_sessions.insert(session.to_owned(), snapshot);
         }
         if let Some(wan_snapshot) = state.wan_rollback_snapshots.remove(session) {
             if wan_snapshot.present {

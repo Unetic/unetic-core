@@ -3,7 +3,7 @@ use std::{
     sync::Mutex,
 };
 
-use crate::domain::{WanDesired, WanPublicState, WanStatus, WifiNetworkConfig};
+use crate::domain::{RoamingConfig, WanDesired, WanPublicState, WanStatus, WifiNetworkConfig};
 
 mod mock;
 mod router;
@@ -16,6 +16,8 @@ pub struct FailurePlan {
     pub fail_confirm: bool,
     pub fail_rollback: bool,
     pub fail_candidate_verify: bool,
+    pub fail_wan_candidate_verify: bool,
+    pub fail_wan_runtime_read: bool,
     pub runtime_unhealthy: bool,
 }
 
@@ -26,6 +28,9 @@ pub(crate) struct MemoryState {
     pub(crate) sessions: HashMap<String, BTreeMap<String, WifiNetworkConfig>>,
     pub(crate) wan_sessions: HashMap<String, WanDesired>,
     pub(crate) rollback_snapshots: HashMap<String, BTreeMap<String, WifiNetworkConfig>>,
+    pub(crate) roaming_committed: RoamingConfig,
+    pub(crate) roaming_sessions: HashMap<String, RoamingConfig>,
+    pub(crate) roaming_rollback_snapshots: HashMap<String, RoamingConfig>,
     pub(crate) wan_rollback_snapshots: HashMap<String, WanDesired>,
     pub(crate) wan_runtime: WanPublicState,
     pub(crate) next_session: u64,
@@ -105,6 +110,9 @@ impl MemoryBackend {
                 sessions: HashMap::new(),
                 wan_sessions: HashMap::new(),
                 rollback_snapshots: HashMap::new(),
+                roaming_committed: RoamingConfig::default(),
+                roaming_sessions: HashMap::new(),
+                roaming_rollback_snapshots: HashMap::new(),
                 wan_rollback_snapshots: HashMap::new(),
                 wan_runtime,
                 next_session: 1,
@@ -137,6 +145,15 @@ impl MemoryBackend {
             .collect()
     }
 
+    #[must_use]
+    pub fn committed_wan(&self) -> WanDesired {
+        self.state
+            .lock()
+            .expect("memory backend poisoned")
+            .wan_committed
+            .clone()
+    }
+
     pub fn external_set(&self, target: &str, config: WifiNetworkConfig) {
         self.state
             .lock()
@@ -155,5 +172,20 @@ impl MemoryBackend {
                 ..prev
             },
         );
+    }
+
+    #[must_use]
+    pub fn committed_roaming(&self) -> RoamingConfig {
+        self.state
+            .lock()
+            .expect("memory backend poisoned")
+            .roaming_committed
+    }
+
+    pub fn external_set_roaming(&self, roaming: RoamingConfig) {
+        self.state
+            .lock()
+            .expect("memory backend poisoned")
+            .roaming_committed = roaming;
     }
 }

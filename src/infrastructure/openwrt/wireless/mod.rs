@@ -53,6 +53,8 @@ pub fn discover_primary_wifi() -> Result<DiscoveredWifi, LegacyAppError> {
         encryption: first.2.clone(),
         key: first.3.clone(),
         targets: candidates.into_iter().map(|(name, _, _, _)| name).collect(),
+        backhaul: None,
+        radio_channels: Vec::new(),
     })
 }
 
@@ -147,5 +149,9 @@ fn read_target_wifi_config(
     })
 }
 
+mod ap_roaming;
+pub mod roaming;
 pub mod stage;
+pub(super) mod usteer_runtime;
+mod usteer_stage;
 pub use stage::*;

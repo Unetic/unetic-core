@@ -1,7 +1,7 @@
 use crate::application::app::App;
 use crate::domain::PublicState;
 use crate::domain::extender::{MeshClientMessage, MeshServerMessage, PendingExtender};
-use crate::domain::wifi::WifiNetworkConfig;
+use crate::domain::wifi::WifiDesired;
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpStream};
@@ -13,27 +13,20 @@ pub fn start_master_loop(
     app: Arc<App>,
     mut event_rx: tokio::sync::broadcast::Receiver<PublicState>,
 ) {
-    let (wifi_tx, _) = tokio::sync::broadcast::channel::<WifiNetworkConfig>(10);
+    let (wifi_tx, _) = tokio::sync::broadcast::channel::<WifiDesired>(10);
     let wifi_tx_clone = wifi_tx.clone();
 
     let app_for_event = Arc::clone(&app);
     tokio::spawn(async move {
-        let mut last_wifi: Option<WifiNetworkConfig> = None;
+        let mut last_wifi: Option<WifiDesired> = None;
         while let Ok(_state) = event_rx.recv().await {
             let current = {
                 let inner = app_for_event.inner.lock().unwrap();
-                inner.config.wifi.primary.clone()
+                inner.config.wifi.clone()
             };
-
-            let config = WifiNetworkConfig {
-                ssid: current.ssid,
-                encryption: current.encryption,
-                key: current.key,
-                targets: current.targets,
-            };
-            if Some(&config) != last_wifi.as_ref() {
-                let _ = wifi_tx_clone.send(config.clone());
-                last_wifi = Some(config);
+            if Some(&current) != last_wifi.as_ref() {
+                let _ = wifi_tx_clone.send(current.clone());
+                last_wifi = Some(current);
             }
         }
     });
@@ -70,7 +63,7 @@ pub fn start_master_loop(
 async fn handle_client(
     stream: TcpStream,
     app: Arc<App>,
-    wifi_rx: tokio::sync::broadcast::Receiver<WifiNetworkConfig>,
+    wifi_rx: tokio::sync::broadcast::Receiver<WifiDesired>,
 ) -> Result<(), MeshError> {
     let (r, mut w) = tokio::io::split(stream);
     let mut reader = BufReader::new(r);
@@ -156,15 +149,16 @@ async fn run_authenticated_master(
     w: &mut tokio::io::WriteHalf<TcpStream>,
     reader: &mut BufReader<tokio::io::ReadHalf<TcpStream>>,
     app: &Arc<App>,
-    mut wifi_rx: tokio::sync::broadcast::Receiver<WifiNetworkConfig>,
+    mut wifi_rx: tokio::sync::broadcast::Receiver<WifiDesired>,
     authenticated_mac: &str,
 ) -> Result<(), MeshError> {
-    let wifi_config = {
+    let wifi = {
         let inner = app.inner.lock().unwrap();
-        inner.config.wifi.primary.clone()
+        inner.config.wifi.clone()
     };
     let msg = MeshServerMessage::MasterWifi {
-        config: wifi_config,
+        config: wifi.primary,
+        roaming: Some(wifi.roaming),
     };
     w.write_all(format!("{}\n", serde_json::to_string(&msg)?).as_bytes())
         .await?;
@@ -174,8 +168,11 @@ async fn run_authenticated_master(
     loop {
         tokio::select! {
             result = wifi_rx.recv() => {
-                if let Ok(config) = result {
-                    let msg = MeshServerMessage::MasterWifi { config };
+                if let Ok(wifi) = result {
+                    let msg = MeshServerMessage::MasterWifi {
+                        config: wifi.primary,
+                        roaming: Some(wifi.roaming),
+                    };
                     if w.write_all(format!("{}\n", serde_json::to_string(&msg)?).as_bytes()).await.is_err() { break; }
                 }
             }

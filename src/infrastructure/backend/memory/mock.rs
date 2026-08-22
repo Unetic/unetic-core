@@ -76,10 +76,7 @@ pub(crate) fn mock_devices() -> Vec<Device> {
             ip: Some("192.168.1.100".into()),
             ip6: Some("2001:db8::1".into()),
             hostname: Some("Alice-Phone".into()),
-            connection: crate::domain::device::DeviceConnection::Wireless {
-                signal_dbm: -82,
-                distance_m: 10.0,
-            },
+            connection: crate::domain::device::DeviceConnection::Wireless { signal_dbm: -82 },
         },
         Device {
             mac: "66:77:88:99:aa:bb".into(),
@@ -93,10 +90,7 @@ pub(crate) fn mock_devices() -> Vec<Device> {
             ip: Some("192.168.1.102".into()),
             ip6: None,
             hostname: None,
-            connection: crate::domain::device::DeviceConnection::Wireless {
-                signal_dbm: -50,
-                distance_m: 5.0,
-            },
+            connection: crate::domain::device::DeviceConnection::Wireless { signal_dbm: -50 },
         },
     ]
 }

@@ -50,10 +50,7 @@ mod tests {
         assert_eq!(devices[0].mac, "00:11:22:33:44:55");
         assert_eq!(
             devices[0].connection,
-            crate::domain::device::DeviceConnection::Wireless {
-                signal_dbm: -82,
-                distance_m: 10.0
-            }
+            crate::domain::device::DeviceConnection::Wireless { signal_dbm: -82 }
         );
         assert_eq!(devices[1].mac, "66:77:88:99:aa:bb");
         assert_eq!(

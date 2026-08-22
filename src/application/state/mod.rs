@@ -33,23 +33,35 @@ impl App {
     }
 
     pub(crate) fn refresh_observed(&self) -> bool {
-        let (targets, desired) = {
+        let (targets, desired, roaming) = {
             let inner = self.inner.lock().expect("app state poisoned");
             (
                 inner.config.wifi.primary.targets.clone(),
                 inner.config.wifi.primary.clone(),
+                inner.config.wifi.roaming,
             )
         };
 
-        let wan_status = self.backend.read_wan_runtime_status().unwrap_or_default();
-        let mut wan_changed = false;
-        {
+        let wan_observation = self.backend.read_wan_runtime_status();
+        let wan_changed = {
             let mut inner = self.inner.lock().expect("app state poisoned");
-            if inner.wan != wan_status {
-                inner.wan = wan_status;
-                wan_changed = true;
+            match wan_observation {
+                Ok(wan_status) => {
+                    let changed = inner.wan != wan_status || inner.health.wan != "ok";
+                    inner.wan = wan_status;
+                    inner.health.wan = "ok".into();
+                    changed
+                }
+                Err(error) => {
+                    warn!(%error, "failed to observe WAN runtime");
+                    let changed = inner.health.wan != "error"
+                        || inner.last_system_error.as_ref() != Some(&error);
+                    inner.health.wan = "error".into();
+                    inner.last_system_error = Some(error);
+                    changed
+                }
             }
-        }
+        };
 
         if targets.is_empty() {
             return wan_changed;
@@ -57,6 +69,10 @@ impl App {
 
         match self.backend.read_wifi_configs(&targets, None) {
             Ok(observed_configs) => {
+                let observed_roaming = self.backend.read_roaming_config(&targets, None).ok();
+                let roaming_runtime =
+                    self.backend
+                        .read_roaming_runtime(&targets, &desired.ssid, roaming);
                 let (runtime, runtime_error) =
                     match self.backend.runtime_healthy(&targets, &desired.ssid) {
                         Ok(value) => (value, None),
@@ -69,12 +85,16 @@ impl App {
                 let wireless_health = if runtime { "ok" } else { "error" };
                 let changed = inner.observed_configs != observed_configs
                     || inner.runtime_healthy != runtime
+                    || inner.observed_roaming != observed_roaming
+                    || inner.roaming_runtime != roaming_runtime
                     || inner.health.wireless != wireless_health
                     || wan_changed
                     || runtime_error
                         .as_ref()
                         .is_some_and(|error| inner.last_system_error.as_ref() != Some(error));
                 inner.observed_configs = observed_configs;
+                inner.observed_roaming = observed_roaming;
+                inner.roaming_runtime = roaming_runtime;
                 inner.runtime_healthy = runtime;
                 inner.health.wireless = wireless_health.into();
                 if let Some(error) = runtime_error {
@@ -84,11 +104,16 @@ impl App {
             }
             Err(error) => {
                 warn!(%error, "failed to observe wireless config");
+                let roaming_runtime =
+                    self.backend
+                        .read_roaming_runtime(&targets, &desired.ssid, roaming);
                 let mut inner = self.inner.lock().expect("app state poisoned");
                 let changed = inner.health.wireless != "error"
                     || wan_changed
                     || inner.last_system_error.as_ref() != Some(&error);
                 inner.health.wireless = "error".into();
+                inner.observed_roaming = None;
+                inner.roaming_runtime = roaming_runtime;
                 inner.last_system_error = Some(error);
                 changed
             }
@@ -116,6 +141,15 @@ pub(crate) fn snapshot(inner: &Inner) -> PublicState {
     }
     if !inner.runtime_healthy && !desired.targets.is_empty() {
         drift_fields.push("wifi.primary.runtime".into());
+    }
+    let expected_roaming = crate::domain::compile_applied_roaming(
+        inner.config.wifi.roaming,
+        &desired.ssid,
+        &desired.encryption,
+        &desired.targets,
+    );
+    if !desired.targets.is_empty() && inner.observed_roaming.as_ref() != Some(&expected_roaming) {
+        drift_fields.push("wifi.roaming.policy".into());
     }
     let drifted = !drift_fields.is_empty();
 
@@ -151,6 +185,10 @@ pub(crate) fn snapshot(inner: &Inner) -> PublicState {
                 .map(|(t, c)| (t.clone(), c.ssid.clone()))
                 .collect(),
             status: wifi_status,
+            roaming: inner.config.wifi.roaming,
+            roaming_runtime: inner.roaming_runtime.clone(),
+            backhaul: inner.config.wifi.backhaul.clone(),
+            radio_channels: inner.config.wifi.radio_channels.clone(),
         },
         wan: inner.wan.clone(),
         active_operation: inner.active_operation.clone(),
@@ -253,6 +291,78 @@ pub fn validate_wifi_config(
     Ok(())
 }
 
+pub fn validate_mesh_backhaul_config(
+    backhaul: &crate::domain::wifi::MeshBackhaulConfig,
+    available_targets: &[String],
+    radio_channels: &[crate::domain::wifi::RadioChannelConfig],
+) -> Result<(), LegacyAppError> {
+    if !backhaul.enabled {
+        return Ok(());
+    }
+
+    if available_targets.len() < 2 {
+        return Err(LegacyAppError::new(
+            ErrorCode::InvalidArgument,
+            ErrorStage::Validate,
+            "Dual-radio hardware (at least 2 radios) is required for dedicated wireless backhaul",
+        ));
+    }
+
+    if backhaul.backhaul_target == backhaul.client_target {
+        return Err(LegacyAppError::new(
+            ErrorCode::InvalidArgument,
+            ErrorStage::Validate,
+            "Backhaul radio chip and Client access radio chip must be different",
+        ));
+    }
+
+    if !available_targets.contains(&backhaul.backhaul_target) {
+        return Err(LegacyAppError::new(
+            ErrorCode::InvalidArgument,
+            ErrorStage::Validate,
+            format!(
+                "Backhaul target radio '{}' does not exist in available radios",
+                backhaul.backhaul_target
+            ),
+        ));
+    }
+
+    if !available_targets.contains(&backhaul.client_target) {
+        return Err(LegacyAppError::new(
+            ErrorCode::InvalidArgument,
+            ErrorStage::Validate,
+            format!(
+                "Client target radio '{}' does not exist in available radios",
+                backhaul.client_target
+            ),
+        ));
+    }
+
+    let b_chan = radio_channels
+        .iter()
+        .find(|rc| rc.target == backhaul.backhaul_target)
+        .map(|rc| rc.channel);
+    let c_chan = radio_channels
+        .iter()
+        .find(|rc| rc.target == backhaul.client_target)
+        .map(|rc| rc.channel);
+
+    if let (Some(b), Some(c)) = (b_chan, c_chan) {
+        if b > 0 && c > 0 && b == c {
+            return Err(LegacyAppError::new(
+                ErrorCode::InvalidArgument,
+                ErrorStage::Validate,
+                format!(
+                    "Backhaul radio ({}) and Client radio ({}) must operate on different channels",
+                    backhaul.backhaul_target, backhaul.client_target
+                ),
+            ));
+        }
+    }
+
+    Ok(())
+}
+
 pub fn generate_id(prefix: &str) -> String {
     if let Ok(value) = fs::read_to_string("/proc/sys/kernel/random/uuid") {
         return format!("{prefix}-{}", value.trim());
@@ -267,3 +377,6 @@ pub fn now_ms() -> u64 {
             duration.as_millis().try_into().unwrap_or(u64::MAX)
         })
 }
+
+#[cfg(test)]
+mod tests;

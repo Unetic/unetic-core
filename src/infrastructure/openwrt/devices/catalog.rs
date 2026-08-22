@@ -73,15 +73,10 @@ fn is_valid_mac(mac: &str) -> bool {
             .all(|part| part.len() == 2 && part.chars().all(|c| c.is_ascii_hexdigit()))
 }
 
-pub fn calculate_distance_m(signal_dbm: i32) -> f32 {
-    let abs_signal = signal_dbm.saturating_abs() as f32;
-    10_f32.powf((abs_signal - 40.0) / 20.0)
-}
-
 pub fn merge_devices(
     dhcp_leases: HashMap<String, DhcpLease>,
     arp_entries: HashMap<String, ArpEntry>,
-    wireless_clients: HashMap<String, (i32, f32)>,
+    wireless_clients: HashMap<String, i32>,
     mac_to_iface: HashMap<String, String>,
     ip6_by_mac: HashMap<String, String>,
     extenders: &[KnownExtender],
@@ -142,7 +137,7 @@ pub fn merge_devices(
 
 fn device_connection(
     mac: &str,
-    wireless_clients: &HashMap<String, (i32, f32)>,
+    wireless_clients: &HashMap<String, i32>,
     mac_to_iface: &HashMap<String, String>,
     iface_to_extender: &HashMap<String, String>,
     extenders: &[KnownExtender],
@@ -163,15 +158,11 @@ fn device_connection(
         return DeviceConnection::ViaExtender {
             extender_mac: extender_mac.clone(),
             signal_dbm: client.map(|client| client.signal_dbm),
-            distance_m: client.and_then(|client| client.distance_m),
         };
     }
 
-    if let Some(&(signal_dbm, distance_m)) = wireless_clients.get(mac) {
-        return DeviceConnection::Wireless {
-            signal_dbm,
-            distance_m,
-        };
+    if let Some(&signal_dbm) = wireless_clients.get(mac) {
+        return DeviceConnection::Wireless { signal_dbm };
     }
 
     if let Some(iface) = mac_to_iface.get(mac) {

@@ -25,7 +25,7 @@ fn test_merge_and_sort() {
         "192.168.1.100 0x1 0x2 00:11:22:33:44:55 * br-lan\n192.168.1.150 0x1 0x2 11:22:33:44:55:66 * br-lan",
     );
     let mut wireless = HashMap::new();
-    wireless.insert("00:11:22:33:44:55".into(), (-60, 10.0));
+    wireless.insert("00:11:22:33:44:55".into(), -60);
     let mut mac_to_iface = HashMap::new();
     mac_to_iface.insert("aa:bb:cc:dd:ee:ff".into(), "lan1".into());
     let mut ip6_by_mac = HashMap::new();
@@ -48,10 +48,7 @@ fn test_merge_and_sort() {
     assert_eq!(devices[0].ip6, Some("2001:db8::1".into()));
     assert_eq!(
         devices[0].connection,
-        crate::domain::device::DeviceConnection::Wireless {
-            signal_dbm: -60,
-            distance_m: 10.0
-        }
+        crate::domain::device::DeviceConnection::Wireless { signal_dbm: -60 }
     );
     assert_eq!(devices[1].mac, "aa:bb:cc:dd:ee:ff");
     assert_eq!(

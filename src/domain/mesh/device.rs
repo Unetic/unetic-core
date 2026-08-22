@@ -8,12 +8,10 @@ pub enum DeviceConnection {
     },
     Wireless {
         signal_dbm: i32,
-        distance_m: f32,
     },
     ViaExtender {
         extender_mac: String,
         signal_dbm: Option<i32>,
-        distance_m: Option<f32>,
     },
     Unknown,
 }

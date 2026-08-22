@@ -16,9 +16,10 @@ use crate::{
 impl App {
     pub fn set_wan(
         self: &Arc<Self>,
-        request: SetWanRequest,
+        mut request: SetWanRequest,
     ) -> Result<OperationAccepted, LegacyAppError> {
         validate_wan_request(&request)?;
+        request.wan = crate::application::wan::normalize_wan_desired(request.wan);
 
         let (context, noop_result) = {
             let mut inner = self.inner.lock().expect("app state poisoned");

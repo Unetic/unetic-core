@@ -29,7 +29,12 @@ impl DesiredConfig {
         Self {
             schema_version: STATE_SCHEMA_VERSION,
             revision: 1,
-            wifi: WifiDesired { primary },
+            wifi: WifiDesired {
+                primary,
+                roaming: Default::default(),
+                backhaul: None,
+                radio_channels: Vec::new(),
+            },
             wan,
             registered_devices: Vec::new(),
             dns: crate::domain::DnsConfig::default(),

@@ -140,10 +140,9 @@ async fn run_authenticated_extender(
             let wireless_clients = crate::infrastructure::openwrt::devices::get_wireless_clients()
                 .into_iter()
                 .map(
-                    |(c_mac, (signal_dbm, distance_m))| crate::domain::extender::ExtenderClient {
+                    |(c_mac, signal_dbm)| crate::domain::extender::ExtenderClient {
                         mac: c_mac,
                         signal_dbm,
-                        distance_m: Some(distance_m),
                     },
                 )
                 .collect();
@@ -181,9 +180,11 @@ async fn run_authenticated_extender(
 }
 
 async fn handle_server_message(msg: MeshServerMessage, app: &Arc<App>) {
-    if let MeshServerMessage::MasterWifi { config } = msg {
+    if let MeshServerMessage::MasterWifi { config, roaming } = msg {
         let app = Arc::clone(app);
-        match tokio::task::spawn_blocking(move || app.apply_master_wifi_config(config)).await {
+        match tokio::task::spawn_blocking(move || app.apply_master_wifi_config(config, roaming))
+            .await
+        {
             Ok(Ok(())) => {}
             Ok(Err(error)) => warn!(%error, "failed to apply master Wi-Fi configuration"),
             Err(error) => warn!(%error, "mesh Wi-Fi apply task failed"),

@@ -34,13 +34,22 @@ impl App {
             let mut inner = self.inner.lock().expect("app state poisoned");
             check_app_ready(&inner)?;
 
-            if let Some(accepted) = check_idempotency(&inner, &request)? {
+            if let Some(backhaul) = &request.backhaul {
+                crate::application::state::validate_mesh_backhaul_config(
+                    backhaul,
+                    &inner.config.wifi.primary.targets,
+                    &request.radio_channels,
+                )?;
+            }
+
+            let roaming = request.roaming.unwrap_or(inner.config.wifi.roaming);
+            if let Some(accepted) = check_idempotency(&inner, &request, roaming)? {
                 return Ok(accepted);
             }
 
             check_revision(inner.config.revision, request.expected_revision)?;
 
-            if is_wifi_noop(&inner.config.wifi.primary, &request) {
+            if is_wifi_noop(&inner.config.wifi, &request, roaming) {
                 let accepted = OperationAccepted {
                     operation_id: self.next_operation_id(),
                     status: OperationStatus::Succeeded,
@@ -50,10 +59,12 @@ impl App {
                     &accepted,
                     inner.config.revision,
                     &request,
+                    roaming,
                 ));
                 (None, Some(accepted))
             } else {
-                let context = build_wifi_change_context(&inner, self.next_operation_id(), &request);
+                let context =
+                    build_wifi_change_context(&inner, self.next_operation_id(), &request, roaming);
                 inner.active_operation = Some(context.public(OperationStatus::Accepted, None));
                 (Some(context), None)
             }
@@ -162,8 +173,9 @@ fn check_app_ready(inner: &Inner) -> Result<(), LegacyAppError> {
 fn check_idempotency(
     inner: &Inner,
     request: &SetWifiConfigRequest,
+    roaming: crate::domain::RoamingConfig,
 ) -> Result<Option<OperationAccepted>, LegacyAppError> {
-    let intent = wifi_intent(request);
+    let intent = wifi_intent(request, roaming);
     if let Some(active) = &inner.active_operation {
         if active.request_id.as_deref() == Some(request.request_id.as_str()) {
             if active.intent.as_ref() != Some(&intent) {
@@ -198,7 +210,10 @@ fn check_idempotency(
     Ok(None)
 }
 
-fn wifi_intent(request: &SetWifiConfigRequest) -> OperationIntent {
+fn wifi_intent(
+    request: &SetWifiConfigRequest,
+    roaming: crate::domain::RoamingConfig,
+) -> OperationIntent {
     let key = if request.encryption == "none" {
         None
     } else {
@@ -208,6 +223,7 @@ fn wifi_intent(request: &SetWifiConfigRequest) -> OperationIntent {
         ssid: request.ssid.clone(),
         encryption: request.encryption.clone(),
         key,
+        roaming,
     }
 }
 
@@ -215,6 +231,7 @@ fn noop_last_operation(
     accepted: &OperationAccepted,
     revision: u64,
     request: &SetWifiConfigRequest,
+    roaming: crate::domain::RoamingConfig,
 ) -> LastOperation {
     LastOperation {
         id: accepted.operation_id.clone(),
@@ -224,7 +241,7 @@ fn noop_last_operation(
         status: OperationStatus::Succeeded,
         revision,
         requested_ssid: request.ssid.clone(),
-        intent: Some(wifi_intent(request)),
+        intent: Some(wifi_intent(request, roaming)),
         error: None,
         finished_at_ms: now_ms(),
     }
@@ -257,21 +274,29 @@ fn check_revision(current_revision: u64, expected_revision: u64) -> Result<(), L
     Ok(())
 }
 
-fn is_wifi_noop(current: &WifiNetworkConfig, request: &SetWifiConfigRequest) -> bool {
+fn is_wifi_noop(
+    current: &crate::domain::wifi::WifiDesired,
+    request: &SetWifiConfigRequest,
+    roaming: crate::domain::RoamingConfig,
+) -> bool {
     let normalized_key = if request.encryption == "none" {
         None
     } else {
         request.key.clone()
     };
-    current.ssid == request.ssid
-        && current.encryption == request.encryption
-        && current.key == normalized_key
+    current.primary.ssid == request.ssid
+        && current.primary.encryption == request.encryption
+        && current.primary.key == normalized_key
+        && current.roaming == roaming
+        && current.backhaul == request.backhaul
+        && current.radio_channels == request.radio_channels
 }
 
 fn build_wifi_change_context(
     inner: &Inner,
     operation_id: String,
     request: &SetWifiConfigRequest,
+    roaming: crate::domain::RoamingConfig,
 ) -> ChangeContext {
     let normalized_key = if request.encryption == "none" {
         None
@@ -293,7 +318,11 @@ fn build_wifi_change_context(
         target_revision: inner.config.revision + 1,
         old_wifi: inner.config.wifi.primary.clone(),
         new_wifi,
+        old_roaming: inner.config.wifi.roaming,
+        new_roaming: roaming,
         targets: inner.config.wifi.primary.targets.clone(),
+        backhaul: request.backhaul.clone(),
+        radio_channels: request.radio_channels.clone(),
     }
 }
 

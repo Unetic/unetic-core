@@ -7,7 +7,7 @@ use crate::{
     domain::errors::{ErrorCode, ErrorStage, LegacyAppError},
     domain::{
         OperationIntent, OperationSource, OperationStatus, PublicOperation, STATE_SCHEMA_VERSION,
-        TransactionJournal, WifiNetworkConfig,
+        TransactionJournal, TransactionKind, WifiNetworkConfig,
     },
 };
 
@@ -20,7 +20,11 @@ pub struct ChangeContext {
     pub target_revision: u64,
     pub old_wifi: WifiNetworkConfig,
     pub new_wifi: WifiNetworkConfig,
+    pub old_roaming: crate::domain::RoamingConfig,
+    pub new_roaming: crate::domain::RoamingConfig,
     pub targets: Vec<String>,
+    pub backhaul: Option<crate::domain::wifi::MeshBackhaulConfig>,
+    pub radio_channels: Vec<crate::domain::wifi::RadioChannelConfig>,
 }
 
 impl ChangeContext {
@@ -41,6 +45,7 @@ impl ChangeContext {
                 ssid: self.new_wifi.ssid.clone(),
                 encryption: self.new_wifi.encryption.clone(),
                 key: self.new_wifi.key.clone(),
+                roaming: self.new_roaming,
             }),
             error,
         }
@@ -55,13 +60,18 @@ impl ChangeContext {
             source: self.source,
             base_revision: self.base_revision,
             target_revision: self.target_revision,
+            kind: TransactionKind::Wifi,
             old_ssid: self.old_wifi.ssid.clone(),
             new_ssid: self.new_wifi.ssid.clone(),
             old_encryption: self.old_wifi.encryption.clone(),
             new_encryption: self.new_wifi.encryption.clone(),
             old_key: self.old_wifi.key.clone(),
             new_key: self.new_wifi.key.clone(),
+            old_roaming: self.old_roaming,
+            new_roaming: self.new_roaming,
             targets: self.targets.clone(),
+            old_wan: None,
+            new_wan: None,
             phase,
         }
     }
@@ -128,8 +138,13 @@ fn stage_and_verify(
         let inner = app.inner.lock().unwrap();
         inner.config.wan.proto == crate::domain::WanProtocol::Extender
     };
-    app.backend
-        .stage_wifi_config(session_id, &context.targets, &context.new_wifi, is_extender)?;
+    app.backend.stage_wifi_config(
+        session_id,
+        &context.targets,
+        &context.new_wifi,
+        context.new_roaming,
+        is_extender,
+    )?;
 
     let staged = app
         .backend
@@ -148,6 +163,24 @@ fn stage_and_verify(
             ErrorCode::UciStageMismatch,
             ErrorStage::Stage,
             "staged UCI values do not match requested Wi-Fi configuration",
+        ));
+    }
+
+    let expected_roaming = crate::domain::compile_applied_roaming(
+        context.new_roaming,
+        &context.new_wifi.ssid,
+        &context.new_wifi.encryption,
+        &context.targets,
+    );
+    if app
+        .backend
+        .read_roaming_config(&context.targets, Some(session_id))?
+        != expected_roaming
+    {
+        return Err(LegacyAppError::new(
+            ErrorCode::UciStageMismatch,
+            ErrorStage::Stage,
+            "staged wireless or usteer roaming policy does not match requested configuration",
         ));
     }
 
@@ -174,6 +207,7 @@ fn apply_and_verify(
         app,
         &context.targets,
         &context.new_wifi,
+        context.new_roaming,
         app.timing.verify_timeout,
     )
 }
@@ -219,6 +253,7 @@ fn rollback_to_old(
         app,
         &context.targets,
         &context.old_wifi,
+        context.old_roaming,
         app.timing.rollback_verify_timeout,
     );
     if let Err(error) = rollback_result {

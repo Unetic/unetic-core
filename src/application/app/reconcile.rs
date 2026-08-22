@@ -204,8 +204,15 @@ fn evaluate_reconcile_state(
         &inner.observed_configs,
         &inner.config.wifi.primary.targets,
         &inner.config.wifi.primary,
-    );
-    let wan_drift = observed_wan.is_some_and(|w| w != &inner.config.wan);
+    ) || inner.observed_roaming.as_ref()
+        != Some(&crate::domain::compile_applied_roaming(
+            inner.config.wifi.roaming,
+            &inner.config.wifi.primary.ssid,
+            &inner.config.wifi.primary.encryption,
+            &inner.config.wifi.primary.targets,
+        ));
+    let wan_drift = observed_wan
+        .is_some_and(|wan| !crate::application::wan::wan_config_matches(wan, &inner.config.wan));
     let runtime_drift = !inner.runtime_healthy;
 
     if !config_drift && !wan_drift && !runtime_drift {
@@ -254,7 +261,11 @@ fn build_wifi_reconcile_context(inner: &Inner, op_id: String) -> ChangeContext {
         target_revision: inner.config.revision,
         old_wifi: inner.config.wifi.primary.clone(),
         new_wifi: inner.config.wifi.primary.clone(),
+        old_roaming: inner.config.wifi.roaming,
+        new_roaming: inner.config.wifi.roaming,
         targets: inner.config.wifi.primary.targets.clone(),
+        backhaul: inner.config.wifi.backhaul.clone(),
+        radio_channels: inner.config.wifi.radio_channels.clone(),
     }
 }
 

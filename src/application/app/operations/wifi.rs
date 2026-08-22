@@ -48,6 +48,13 @@ impl App {
         };
         config.revision = context.target_revision;
         config.wifi.primary = context.new_wifi.clone();
+        config.wifi.roaming = context.new_roaming;
+        if context.backhaul.is_some() {
+            config.wifi.backhaul = context.backhaul.clone();
+        }
+        if !context.radio_channels.is_empty() {
+            config.wifi.radio_channels = context.radio_channels.clone();
+        }
         self.store.persist_config(&config)?;
         {
             let mut inner = self.inner.lock().expect("app state poisoned");
@@ -197,6 +204,7 @@ impl App {
                 ssid: journal.new_ssid.clone(),
                 encryption: journal.new_encryption.clone(),
                 key: journal.new_key.clone(),
+                roaming: journal.new_roaming,
             }),
             error,
             finished_at_ms: now_ms(),
@@ -226,6 +234,7 @@ fn make_wifi_last_op(
             ssid: context.new_wifi.ssid.clone(),
             encryption: context.new_wifi.encryption.clone(),
             key: context.new_wifi.key.clone(),
+            roaming: context.new_roaming,
         }),
         error,
         finished_at_ms: now_ms(),
@@ -251,6 +260,19 @@ fn apply_wifi_success_state(
             (t.clone(), cfg)
         })
         .collect();
+    inner.observed_roaming = Some(crate::domain::compile_applied_roaming(
+        context.new_roaming,
+        &context.new_wifi.ssid,
+        &context.new_wifi.encryption,
+        &context.targets,
+    ));
+    inner.roaming_runtime = crate::domain::RoamingRuntime {
+        available: true,
+        local_bss: context.targets.len().try_into().unwrap_or(u32::MAX),
+        remote_bss: inner.roaming_runtime.remote_bss,
+        status: crate::domain::RoamingRuntimeStatus::Ready,
+        error: None,
+    };
     inner.runtime_healthy = true;
     inner.repair_failures = 0;
     inner.health.wireless = "ok".into();
