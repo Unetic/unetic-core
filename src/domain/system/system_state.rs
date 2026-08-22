@@ -82,8 +82,8 @@ impl Default for HealthState {
 }
 
 use super::operation::{LastOperation, PublicOperation};
-use super::wan::WanPublicState;
-use super::wifi::WifiPublicState;
+use crate::domain::wan::WanPublicState;
+use crate::domain::wifi::WifiPublicState;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct PublicState {

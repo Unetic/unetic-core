@@ -1,8 +1,8 @@
 use serde::{Deserialize, Serialize};
 
-use super::system::STATE_SCHEMA_VERSION;
-use super::wan::WanDesired;
-use super::wifi::{WifiDesired, WifiNetworkConfig};
+use crate::domain::system::STATE_SCHEMA_VERSION;
+use crate::domain::wan::WanDesired;
+use crate::domain::wifi::{WifiDesired, WifiNetworkConfig};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DesiredConfig {
