@@ -5,3 +5,4 @@ pub mod dns;
 pub mod traffic;
 pub mod ddns;
 pub mod mesh;
+pub mod rrm;

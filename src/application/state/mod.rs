@@ -171,6 +171,8 @@ pub fn snapshot(inner: &Inner) -> PublicState {
         extender_ports: inner.extender_ports.clone(),
         pending_extenders: inner.pending_extenders.clone(),
         extender_pairing_status: inner.extender_pairing_status.clone(),
+        extender_clients: inner.extender_clients.clone(),
+        latest_scans: inner.latest_scans.clone(),
     }
 }
 

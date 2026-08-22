@@ -85,7 +85,7 @@ use super::operation::{LastOperation, PublicOperation};
 use super::wan::WanPublicState;
 use super::wifi::WifiPublicState;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct PublicState {
     pub core_version: String,
     pub boot_id: String,
@@ -116,4 +116,8 @@ pub struct PublicState {
     pub pending_extenders: Vec<crate::domain::extender::PendingExtender>,
     #[serde(default)]
     pub extender_pairing_status: String,
+    #[serde(default)]
+    pub extender_clients: std::collections::HashMap<String, Vec<crate::domain::extender::ExtenderClient>>,
+    #[serde(default)]
+    pub latest_scans: std::collections::HashMap<String, Vec<crate::domain::extender::ScannedNetwork>>,
 }

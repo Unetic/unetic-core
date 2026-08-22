@@ -48,14 +48,37 @@ pub fn start_mesh_sync(app: Arc<App>, mut event_rx: tokio::sync::broadcast::Rece
                                 if success {
                                     let app_clone = Arc::clone(&app);
                                     let mac_clone = mac.clone();
+                                    let mac_clone_2 = mac.clone();
+                                    
+                                    let (scan_tx, mut scan_rx) = tokio::sync::mpsc::channel::<Vec<crate::domain::extender::ScannedNetwork>>(1);
+                                    
                                     tokio::spawn(async move {
                                         loop {
-                                            tokio::time::sleep(Duration::from_secs(10)).await;
-                                            let ports = app_clone.ports_list().unwrap_or_default();
-                                            let msg = MeshClientMessage::Telemetry { mac: mac_clone.clone(), ports };
-                                            if let Ok(json) = serde_json::to_string(&msg) {
-                                                if w.write_all(format!("{}\n", json).as_bytes()).await.is_err() {
-                                                    break;
+                                            tokio::select! {
+                                                _ = tokio::time::sleep(Duration::from_secs(10)) => {
+                                                    let ports = app_clone.ports_list().unwrap_or_default();
+                                                    let wireless_clients = crate::infrastructure::openwrt::devices::get_wireless_clients()
+                                                        .into_iter()
+                                                        .map(|(c_mac, (signal_dbm, distance_m))| crate::domain::extender::ExtenderClient {
+                                                            mac: c_mac,
+                                                            signal_dbm,
+                                                            distance_m: Some(distance_m),
+                                                        })
+                                                        .collect();
+                                                    let msg = MeshClientMessage::Telemetry { mac: mac_clone.clone(), ports, wireless_clients };
+                                                    if let Ok(json) = serde_json::to_string(&msg) {
+                                                        if w.write_all(format!("{}\n", json).as_bytes()).await.is_err() {
+                                                            break;
+                                                        }
+                                                    }
+                                                },
+                                                Some(networks) = scan_rx.recv() => {
+                                                    let msg = MeshClientMessage::ScanResults { mac: mac_clone_2.clone(), networks };
+                                                    if let Ok(json) = serde_json::to_string(&msg) {
+                                                        if w.write_all(format!("{}\n", json).as_bytes()).await.is_err() {
+                                                            break;
+                                                        }
+                                                    }
                                                 }
                                             }
                                         }
@@ -64,13 +87,53 @@ pub fn start_mesh_sync(app: Arc<App>, mut event_rx: tokio::sync::broadcast::Rece
                                     line.clear();
                                     while let Ok(n) = reader.read_line(&mut line).await {
                                         if n == 0 { break; }
-                                        if let Ok(MeshServerMessage::MasterWifi { config }) = serde_json::from_str(&line) {
-                                            let local_wifi = {
-                                                let inner = app.inner.lock().unwrap();
-                                                inner.config.wifi.primary.clone()
-                                            };
-                                            if config.ssid != local_wifi.ssid || config.key != local_wifi.key || config.encryption != local_wifi.encryption {
-                                                // sync wifi...
+                                        if let Ok(server_msg) = serde_json::from_str::<MeshServerMessage>(&line) {
+                                            match server_msg {
+                                                MeshServerMessage::MasterWifi { config } => {
+                                                    let local_wifi = {
+                                                        let inner = app.inner.lock().unwrap();
+                                                        inner.config.wifi.primary.clone()
+                                                    };
+                                                    if config.ssid != local_wifi.ssid || config.key != local_wifi.key || config.encryption != local_wifi.encryption {
+                                                        // sync wifi...
+                                                    }
+                                                },
+                                                MeshServerMessage::CommandScanAirwaves => {
+                                                    let scan_tx_clone = scan_tx.clone();
+                                                    tokio::spawn(async move {
+                                                        let mut networks = Vec::new();
+                                                        for radio in ["radio0", "radio1"] {
+                                                            if let Ok(output) = std::process::Command::new("ubus")
+                                                                .args(["call", "iwinfo", "scan", &format!("{{\"device\":\"{}\"}}", radio)])
+                                                                .output()
+                                                            {
+                                                                if output.status.success() {
+                                                                    if let Ok(json) = serde_json::from_slice::<serde_json::Value>(&output.stdout) {
+                                                                        if let Some(results) = json.get("results").and_then(|r| r.as_array()) {
+                                                                            for r in results {
+                                                                                if let (Some(ssid), Some(bssid), Some(channel), Some(signal)) = (
+                                                                                    r.get("ssid").and_then(|s| s.as_str()),
+                                                                                    r.get("bssid").and_then(|s| s.as_str()),
+                                                                                    r.get("channel").and_then(|c| c.as_u64()),
+                                                                                    r.get("signal").and_then(|s| s.as_i64())
+                                                                                ) {
+                                                                                    networks.push(crate::domain::extender::ScannedNetwork {
+                                                                                        ssid: ssid.to_string(),
+                                                                                        bssid: bssid.to_string(),
+                                                                                        channel: channel as u32,
+                                                                                        signal: signal as i32,
+                                                                                    });
+                                                                                }
+                                                                            }
+                                                                        }
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+                                                        let _ = scan_tx_clone.send(networks).await;
+                                                    });
+                                                },
+                                                _ => {}
                                             }
                                         }
                                         line.clear();
@@ -186,6 +249,7 @@ pub fn start_mesh_sync(app: Arc<App>, mut event_rx: tokio::sync::broadcast::Rece
                                                 let _ = w.write_all(format!("{}\n", json).as_bytes()).await;
                                             }
 
+                                            let mut rrm_rx = app_clone.rrm_tx.subscribe();
                                             line.clear();
                                             loop {
                                                 tokio::select! {
@@ -197,12 +261,23 @@ pub fn start_mesh_sync(app: Arc<App>, mut event_rx: tokio::sync::broadcast::Rece
                                                             }
                                                         }
                                                     }
+                                                    Ok(_) = rrm_rx.recv() => {
+                                                        let msg = MeshServerMessage::CommandScanAirwaves;
+                                                        if let Ok(json) = serde_json::to_string(&msg) {
+                                                            if w.write_all(format!("{}\n", json).as_bytes()).await.is_err() {
+                                                                break;
+                                                            }
+                                                        }
+                                                    }
                                                     result = reader.read_line(&mut line) => {
                                                         match result {
                                                             Ok(0) => break,
                                                             Ok(_) => {
-                                                                if let Ok(MeshClientMessage::Telemetry { mac, ports }) = serde_json::from_str(&line) {
-                                                                    app_clone.update_extender_ports(mac, ports);
+                                                                if let Ok(MeshClientMessage::Telemetry { mac, ports, wireless_clients }) = serde_json::from_str(&line) {
+                                                                    app_clone.update_extender_ports(mac.clone(), ports);
+                                                                    app_clone.update_extender_telemetry(mac, wireless_clients);
+                                                                } else if let Ok(MeshClientMessage::ScanResults { mac, networks }) = serde_json::from_str(&line) {
+                                                                    app_clone.update_scan_results(mac, networks);
                                                                 }
                                                                 line.clear();
                                                             }

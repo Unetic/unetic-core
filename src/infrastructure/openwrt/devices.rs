@@ -69,7 +69,11 @@ fn is_valid_mac(mac: &str) -> bool {
             .all(|p| p.len() == 2 && p.chars().all(|c| c.is_ascii_hexdigit()))
 }
 
-pub fn get_wireless_macs() -> HashMap<String, u8> {
+pub fn calculate_distance_m(signal_dbm: i32) -> f32 {
+    10_f32.powf((signal_dbm.abs() as f32 - 40.0) / 20.0)
+}
+
+pub fn get_wireless_clients() -> HashMap<String, (i32, f32)> {
     let mut stations = HashMap::new();
     let mut ifaces = Vec::new();
 
@@ -115,8 +119,9 @@ pub fn get_wireless_macs() -> HashMap<String, u8> {
                     if let Some(clients) = json.get("clients").and_then(|c| c.as_object()) {
                         for (mac, info) in clients {
                             if let Some(signal) = info.get("signal").and_then(|s| s.as_i64()) {
-                                let pct = std::cmp::min(100, std::cmp::max(0, 2 * (signal + 100))) as u8;
-                                stations.insert(mac.to_ascii_lowercase(), pct);
+                                let signal_dbm = signal as i32;
+                                let distance_m = calculate_distance_m(signal_dbm);
+                                stations.insert(mac.to_ascii_lowercase(), (signal_dbm, distance_m));
                             }
                         }
                     }
@@ -131,10 +136,11 @@ pub fn get_wireless_macs() -> HashMap<String, u8> {
 pub fn merge_devices(
     dhcp_leases: HashMap<String, DhcpLease>,
     arp_entries: HashMap<String, ArpEntry>,
-    wireless_macs: HashMap<String, u8>,
+    wireless_clients: HashMap<String, (i32, f32)>,
     mac_to_iface: HashMap<String, String>,
     ip6_by_mac: HashMap<String, String>,
     extenders: &[crate::domain::extender::KnownExtender],
+    extender_clients: &HashMap<String, Vec<crate::domain::extender::ExtenderClient>>,
 ) -> Vec<Device> {
     let mut all_macs: HashSet<String> = HashSet::new();
     all_macs.extend(arp_entries.keys().cloned());
@@ -166,9 +172,14 @@ pub fn merge_devices(
         let is_extender = extenders.iter().any(|e| e.mac.eq_ignore_ascii_case(&mac));
         let connection = if !is_extender && mac_to_iface.get(&mac).and_then(|i| iface_to_extender.get(i)).is_some() {
             let extender_mac = iface_to_extender[mac_to_iface.get(&mac).unwrap()].clone();
-            crate::domain::device::DeviceConnection::ViaExtender { extender_mac, signal_pct: None }
-        } else if let Some(&signal_pct) = wireless_macs.get(&mac) {
-            crate::domain::device::DeviceConnection::Wireless { signal_pct }
+            
+            let client = extender_clients.values().flatten().find(|c| c.mac.eq_ignore_ascii_case(&mac));
+            let signal_dbm = client.map(|c| c.signal_dbm);
+            let distance_m = client.and_then(|c| c.distance_m);
+
+            crate::domain::device::DeviceConnection::ViaExtender { extender_mac, signal_dbm, distance_m }
+        } else if let Some(&(signal_dbm, distance_m)) = wireless_clients.get(&mac) {
+            crate::domain::device::DeviceConnection::Wireless { signal_dbm, distance_m }
         } else if let Some(iface) = mac_to_iface.get(&mac) {
             let port_id = iface.chars().filter(|c| c.is_ascii_digit()).collect::<String>().parse().unwrap_or(0);
             crate::domain::device::DeviceConnection::Wired { port_id }
@@ -191,12 +202,15 @@ pub fn merge_devices(
     devices
 }
 
-pub fn read_devices(extenders: &[crate::domain::extender::KnownExtender]) -> Result<Vec<Device>, LegacyAppError> {
+pub fn read_devices(
+    extenders: &[crate::domain::extender::KnownExtender],
+    extender_clients: &HashMap<String, Vec<crate::domain::extender::ExtenderClient>>
+) -> Result<Vec<Device>, LegacyAppError> {
     let dhcp_content = fs::read_to_string("/tmp/dhcp.leases").unwrap_or_default();
     let arp_content = fs::read_to_string("/proc/net/arp").unwrap_or_default();
     let dhcp_leases = parse_dhcp_leases(&dhcp_content);
     let arp_entries = parse_arp_table(&arp_content);
-    let wireless_macs = get_wireless_macs();
+    let wireless_clients = get_wireless_clients();
 
     let mut mac_to_iface: HashMap<String, String> = HashMap::new();
     if let Ok(output) = Command::new("bridge").args(["fdb", "show", "dev", "br-lan"]).output() {
@@ -241,7 +255,7 @@ pub fn read_devices(extenders: &[crate::domain::extender::KnownExtender]) -> Res
         }
     }
 
-    Ok(merge_devices(dhcp_leases, arp_entries, wireless_macs, mac_to_iface, ip6_by_mac, extenders))
+    Ok(merge_devices(dhcp_leases, arp_entries, wireless_clients, mac_to_iface, ip6_by_mac, extenders, extender_clients))
 }
 
 #[cfg(test)]
@@ -272,19 +286,20 @@ mod tests {
             "192.168.1.100 0x1 0x2 00:11:22:33:44:55 * br-lan\n192.168.1.150 0x1 0x2 11:22:33:44:55:66 * br-lan",
         );
         let mut wireless = HashMap::new();
-        wireless.insert("00:11:22:33:44:55".into(), 80);
+        wireless.insert("00:11:22:33:44:55".into(), (-60, 10.0));
         let mut mac_to_iface = HashMap::new();
         mac_to_iface.insert("aa:bb:cc:dd:ee:ff".into(), "lan1".into());
         let mut ip6_by_mac = HashMap::new();
         ip6_by_mac.insert("00:11:22:33:44:55".into(), "2001:db8::1".into());
 
         let extenders: Vec<crate::domain::extender::KnownExtender> = Vec::new();
-        let devices = merge_devices(dhcp, arp, wireless, mac_to_iface, ip6_by_mac, &extenders);
+        let extender_clients = HashMap::new();
+        let devices = merge_devices(dhcp, arp, wireless, mac_to_iface, ip6_by_mac, &extenders, &extender_clients);
         assert_eq!(devices.len(), 3);
         assert_eq!(devices[0].mac, "00:11:22:33:44:55");
         assert_eq!(devices[0].ip, Some("192.168.1.100".into()));
         assert_eq!(devices[0].ip6, Some("2001:db8::1".into()));
-        assert_eq!(devices[0].connection, crate::domain::device::DeviceConnection::Wireless { signal_pct: 80 });
+        assert_eq!(devices[0].connection, crate::domain::device::DeviceConnection::Wireless { signal_dbm: -60, distance_m: 10.0 });
         assert_eq!(devices[1].mac, "aa:bb:cc:dd:ee:ff");
         assert_eq!(devices[1].connection, crate::domain::device::DeviceConnection::Wired { port_id: 1 });
         assert_eq!(devices[2].mac, "11:22:33:44:55:66");

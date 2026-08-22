@@ -181,7 +181,8 @@ impl RouterBackend for OpenWrtBackend {
 
     fn ports_list(&self) -> Result<Vec<crate::domain::ports::PhysicalPort>, LegacyAppError> {
         let empty_extenders: Vec<crate::domain::extender::KnownExtender> = Vec::new();
-        let devices = self.read_devices(&empty_extenders).unwrap_or_default();
+        let empty_clients = std::collections::HashMap::new();
+        let devices = self.read_devices(&empty_extenders, &empty_clients).unwrap_or_default();
         Ok(super::ports::ports_list(&devices))
     }
 
@@ -189,8 +190,8 @@ impl RouterBackend for OpenWrtBackend {
         Ok(super::system::read_system_info())
     }
 
-    fn read_devices(&self, extenders: &[crate::domain::extender::KnownExtender]) -> Result<Vec<crate::domain::device::Device>, LegacyAppError> {
-        super::devices::read_devices(extenders)
+    fn read_devices(&self, extenders: &[crate::domain::extender::KnownExtender], extender_clients: &std::collections::HashMap<String, Vec<crate::domain::extender::ExtenderClient>>) -> Result<Vec<crate::domain::device::Device>, LegacyAppError> {
+        super::devices::read_devices(extenders, extender_clients)
     }
 
     fn write_static_lease(&self, _mac: &str, _ip: &str, _hostname: Option<&str>) -> Result<(), LegacyAppError> {

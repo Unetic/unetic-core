@@ -1,11 +1,11 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type")]
 pub enum DeviceConnection {
     Wired { port_id: u8 },
-    Wireless { signal_pct: u8 },
-    ViaExtender { extender_mac: String, signal_pct: Option<u8> },
+    Wireless { signal_dbm: i32, distance_m: f32 },
+    ViaExtender { extender_mac: String, signal_dbm: Option<i32>, distance_m: Option<f32> },
     Unknown,
 }
 
@@ -26,7 +26,7 @@ pub struct RegisteredDevice {
     pub port_forwards: Vec<PortForward>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Device {
     pub mac: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]

@@ -71,6 +71,8 @@ pub(crate) struct Inner {
     pub traffic: crate::domain::traffic::TrafficState,
     pub ddns_status: crate::domain::DdnsStatus,
     pub extender_ports: std::collections::HashMap<String, Vec<crate::domain::ports::PhysicalPort>>,
+    pub extender_clients: std::collections::HashMap<String, Vec<crate::domain::extender::ExtenderClient>>,
+    pub latest_scans: std::collections::HashMap<String, Vec<crate::domain::extender::ScannedNetwork>>,
     pub pending_extenders: Vec<crate::domain::extender::PendingExtender>,
     pub extender_pairing_status: String,
 }
@@ -84,6 +86,7 @@ pub struct App {
     pub(crate) op_counter: AtomicUsize,
     pub(crate) timing: Timing,
     pub subscriptions: crate::application::subscription::SubscriptionManager,
+    pub rrm_tx: Sender<()>,
 }
 
 impl App {
@@ -142,6 +145,8 @@ impl App {
                 traffic: crate::domain::traffic::TrafficState::default(),
                 ddns_status: crate::domain::DdnsStatus::default(),
                 extender_ports: std::collections::HashMap::new(),
+                extender_clients: std::collections::HashMap::new(),
+                latest_scans: std::collections::HashMap::new(),
                 pending_extenders: Vec::new(),
                 extender_pairing_status: "idle".to_string(),
             }),
@@ -150,6 +155,7 @@ impl App {
             op_counter: AtomicUsize::new(1),
             timing,
             subscriptions: crate::application::subscription::SubscriptionManager::new(),
+            rrm_tx: tokio::sync::broadcast::channel(16).0,
         });
 
         app.init();
@@ -208,11 +214,11 @@ impl App {
     }
 
     pub fn devices_list(&self) -> Result<Vec<crate::domain::device::Device>, LegacyAppError> {
-        let extenders = {
+        let (extenders, extender_clients) = {
             let inner = self.inner.lock().unwrap();
-            inner.config.extenders.clone()
+            (inner.config.extenders.clone(), inner.extender_clients.clone())
         };
-        self.backend.read_devices(&extenders)
+        self.backend.read_devices(&extenders, &extender_clients)
     }
 
     pub fn has_active_subscribers(&self) -> bool {
@@ -242,6 +248,22 @@ impl App {
         {
             let mut inner = self.inner.lock().unwrap();
             inner.extender_ports.insert(mac, ports);
+        }
+        self.publish();
+    }
+
+    pub(crate) fn update_extender_telemetry(&self, mac: String, wireless_clients: Vec<crate::domain::extender::ExtenderClient>) {
+        {
+            let mut inner = self.inner.lock().unwrap();
+            inner.extender_clients.insert(mac, wireless_clients);
+        }
+        self.publish();
+    }
+
+    pub(crate) fn update_scan_results(&self, mac: String, networks: Vec<crate::domain::extender::ScannedNetwork>) {
+        {
+            let mut inner = self.inner.lock().unwrap();
+            inner.latest_scans.insert(mac, networks);
         }
         self.publish();
     }

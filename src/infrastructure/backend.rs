@@ -36,7 +36,11 @@ pub trait RouterBackend: Send + Sync {
     fn reload_wireless_runtime(&self) -> Result<(), LegacyAppError>;
     fn ports_list(&self) -> Result<Vec<crate::domain::ports::PhysicalPort>, LegacyAppError>;
     fn read_system_info(&self) -> Result<crate::domain::system::SystemInfo, LegacyAppError>;
-    fn read_devices(&self, extenders: &[crate::domain::extender::KnownExtender]) -> Result<Vec<crate::domain::device::Device>, LegacyAppError>;
+    fn read_devices(
+        &self,
+        extenders: &[crate::domain::extender::KnownExtender],
+        extender_clients: &std::collections::HashMap<String, Vec<crate::domain::extender::ExtenderClient>>
+    ) -> Result<Vec<crate::domain::device::Device>, LegacyAppError>;
     fn write_static_lease(&self, mac: &str, ip: &str, hostname: Option<&str>) -> Result<(), LegacyAppError>;
     fn delete_static_lease(&self, mac: &str) -> Result<(), LegacyAppError>;
     fn sync_port_forwards(&self, registered_devices: &[crate::domain::device::RegisteredDevice], current_devices: &[crate::domain::device::Device]) -> Result<(), LegacyAppError>;
