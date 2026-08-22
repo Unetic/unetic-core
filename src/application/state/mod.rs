@@ -169,6 +169,8 @@ pub fn snapshot(inner: &Inner) -> PublicState {
         ddns_status: inner.ddns_status.clone(),
         extenders: inner.config.extenders.clone(),
         extender_ports: inner.extender_ports.clone(),
+        pending_extenders: inner.pending_extenders.clone(),
+        extender_pairing_status: inner.extender_pairing_status.clone(),
     }
 }
 

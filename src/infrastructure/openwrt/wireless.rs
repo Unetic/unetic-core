@@ -152,6 +152,7 @@ pub fn stage_wifi_config(
     session: &str,
     targets: &[String],
     config: &WifiNetworkConfig,
+    is_extender: bool,
 ) -> Result<(), LegacyAppError> {
     for target in targets {
         let mut values = serde_json::Map::new();
@@ -205,6 +206,41 @@ pub fn stage_wifi_config(
             );
         }
     }
+
+    if is_extender && !targets.is_empty() {
+        let mut backhaul_values = serde_json::Map::new();
+        backhaul_values.insert("device".into(), json!(targets[0]));
+        backhaul_values.insert("mode".into(), json!("sta"));
+        backhaul_values.insert("network".into(), json!("lan"));
+        backhaul_values.insert("wds".into(), json!("1"));
+        backhaul_values.insert("ssid".into(), json!(config.ssid));
+        backhaul_values.insert("encryption".into(), json!(config.encryption));
+        if config.encryption != "none" {
+            if let Some(key) = &config.key {
+                backhaul_values.insert("key".into(), json!(key));
+            }
+        }
+
+        call_ubus(
+            "uci",
+            "set",
+            json!({
+                "config": "wireless",
+                "section": "mesh_backhaul",
+                "type": "wifi-iface",
+                "values": backhaul_values,
+                "ubus_rpc_session": session
+            }),
+        )
+        .map(|_| ())
+        .map_err(|error| {
+            LegacyAppError::new(ErrorCode::UciStageFailed, ErrorStage::Stage, error.message)
+                .retryable(error.retryable)
+        })?;
+
+        let _ = crate::infrastructure::openwrt::network::enable_stp();
+    }
+
     Ok(())
 }
 

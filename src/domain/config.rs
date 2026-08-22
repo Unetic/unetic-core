@@ -19,6 +19,8 @@ pub struct DesiredConfig {
     pub ddns: crate::domain::DdnsConfig,
     #[serde(default)]
     pub extenders: Vec<crate::domain::extender::KnownExtender>,
+    #[serde(default)]
+    pub extender_auth_token: Option<String>,
 }
 
 impl DesiredConfig {
@@ -33,6 +35,7 @@ impl DesiredConfig {
             dns: crate::domain::DnsConfig::default(),
             ddns: crate::domain::DdnsConfig::default(),
             extenders: Vec::new(),
+            extender_auth_token: None,
         }
     }
 
@@ -47,6 +50,7 @@ impl DesiredConfig {
             dns: crate::domain::DnsConfig::default(),
             ddns: crate::domain::DdnsConfig::default(),
             extenders: Vec::new(),
+            extender_auth_token: None,
         }
     }
 }

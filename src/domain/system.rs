@@ -112,4 +112,8 @@ pub struct PublicState {
     pub extenders: Vec<crate::domain::extender::KnownExtender>,
     #[serde(default)]
     pub extender_ports: std::collections::HashMap<String, Vec<crate::domain::ports::PhysicalPort>>,
+    #[serde(default)]
+    pub pending_extenders: Vec<crate::domain::extender::PendingExtender>,
+    #[serde(default)]
+    pub extender_pairing_status: String,
 }

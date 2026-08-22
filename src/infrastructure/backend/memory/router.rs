@@ -93,6 +93,7 @@ impl RouterBackend for MemoryBackend {
         session: &str,
         targets: &[String],
         config: &WifiNetworkConfig,
+        _is_extender: bool,
     ) -> Result<(), LegacyAppError> {
         let mut state = self.state.lock().expect("memory backend poisoned");
         if state.failure.fail_stage {

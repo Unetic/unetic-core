@@ -115,8 +115,12 @@ fn stage_and_verify(
     session_id: &str,
 ) -> Result<(), LegacyAppError> {
     app.set_operation_status(context, OperationStatus::Staging, None)?;
+    let is_extender = {
+        let inner = app.inner.lock().unwrap();
+        inner.config.wan.proto == crate::domain::WanProtocol::Extender
+    };
     app.backend
-        .stage_wifi_config(session_id, &context.targets, &context.new_wifi)?;
+        .stage_wifi_config(session_id, &context.targets, &context.new_wifi, is_extender)?;
 
     let staged = app
         .backend

@@ -66,6 +66,8 @@ pub fn dispatch(app: &Arc<App>, method: &str, request_json: &str) -> String {
         dns::dispatch(app, method, request)
     } else if method.starts_with("ddns.") {
         ddns::dispatch(app, method, request)
+    } else if method.starts_with("mesh.") {
+        mesh::dispatch(app, method, request)
     } else {
         system::dispatch(app, method, request)
     };
@@ -95,3 +97,4 @@ pub fn encode_error(error: u32, token: String) -> String {
     })
     .unwrap_or_else(|_| r#"{"error":1}"#.into())
 }
+pub mod mesh;

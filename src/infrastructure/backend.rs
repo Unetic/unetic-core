@@ -23,6 +23,7 @@ pub trait RouterBackend: Send + Sync {
         session: &str,
         targets: &[String],
         config: &WifiNetworkConfig,
+        is_extender: bool,
     ) -> Result<(), LegacyAppError>;
     fn read_wan_config(&self, session: Option<&str>) -> Result<WanDesired, LegacyAppError>;
     fn stage_wan_config(&self, session: &str, config: &WanDesired) -> Result<(), LegacyAppError>;

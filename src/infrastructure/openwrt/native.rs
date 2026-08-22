@@ -43,8 +43,9 @@ impl RouterBackend for OpenWrtBackend {
         session: &str,
         targets: &[String],
         config: &WifiNetworkConfig,
+        is_extender: bool,
     ) -> Result<(), LegacyAppError> {
-        wireless::stage_wifi_config(session, targets, config)
+        wireless::stage_wifi_config(session, targets, config, is_extender)
     }
 
     fn discover_primary_wan(&self) -> Result<DiscoveredWan, LegacyAppError> {

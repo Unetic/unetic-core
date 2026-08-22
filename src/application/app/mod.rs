@@ -71,6 +71,8 @@ pub(crate) struct Inner {
     pub traffic: crate::domain::traffic::TrafficState,
     pub ddns_status: crate::domain::DdnsStatus,
     pub extender_ports: std::collections::HashMap<String, Vec<crate::domain::ports::PhysicalPort>>,
+    pub pending_extenders: Vec<crate::domain::extender::PendingExtender>,
+    pub extender_pairing_status: String,
 }
 
 pub struct App {
@@ -140,6 +142,8 @@ impl App {
                 traffic: crate::domain::traffic::TrafficState::default(),
                 ddns_status: crate::domain::DdnsStatus::default(),
                 extender_ports: std::collections::HashMap::new(),
+                pending_extenders: Vec::new(),
+                extender_pairing_status: "idle".to_string(),
             }),
             event_tx,
             shutdown: AtomicBool::new(false),
@@ -213,6 +217,25 @@ impl App {
 
     pub fn has_active_subscribers(&self) -> bool {
         self.subscriptions.has_active_subscribers()
+    }
+
+    pub(crate) fn mesh_add_pending(&self, extender: crate::domain::extender::PendingExtender) {
+        {
+            let mut inner = self.inner.lock().unwrap();
+            if !inner.pending_extenders.iter().any(|e| e.mac == extender.mac) {
+                inner.pending_extenders.push(extender);
+            }
+        }
+        self.publish();
+    }
+
+    pub(crate) fn extender_set_token(&self, token: String) {
+        {
+            let mut inner = self.inner.lock().unwrap();
+            inner.config.extender_auth_token = Some(token);
+            let _ = self.store.persist_config(&inner.config);
+        }
+        self.publish();
     }
 
     pub(crate) fn update_extender_ports(&self, mac: String, ports: Vec<crate::domain::ports::PhysicalPort>) {
