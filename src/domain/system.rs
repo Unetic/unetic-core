@@ -102,4 +102,6 @@ pub struct PublicState {
     pub health: HealthState,
     pub registered_devices: Vec<crate::domain::device::RegisteredDevice>,
     pub dns: crate::domain::DnsConfig,
+    #[serde(default)]
+    pub traffic: crate::domain::traffic::TrafficState,
 }

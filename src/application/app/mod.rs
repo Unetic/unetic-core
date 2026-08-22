@@ -68,6 +68,7 @@ pub(crate) struct Inner {
     pub boot_id: String,
     pub health: HealthState,
     pub repair_failures: u8,
+    pub traffic: crate::domain::traffic::TrafficState,
 }
 
 pub struct App {
@@ -134,6 +135,7 @@ impl App {
                     wan: "ok".into(),
                 },
                 repair_failures: 0,
+                traffic: crate::domain::traffic::TrafficState::default(),
             }),
             event_tx,
             shutdown: AtomicBool::new(false),

@@ -45,6 +45,7 @@ async fn main() -> Result<()> {
 
     if !is_memory {
         unetic_core::infrastructure::openwrt::netlink::start_neighbor_listener(Arc::clone(&app));
+        unetic_core::application::traffic_sampler::start_traffic_sampler(Arc::clone(&app));
     }
 
     run_event_loop(app, event_rx, is_memory).await

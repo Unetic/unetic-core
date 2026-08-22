@@ -115,3 +115,17 @@ pub(crate) fn mock_dns_config() -> crate::domain::DnsConfig {
         ],
     }
 }
+
+pub(crate) fn mock_traffic() -> crate::domain::traffic::TrafficState {
+    use crate::domain::traffic::{IfaceStats, TrafficState};
+    use std::collections::HashMap;
+
+    let mut ifaces = HashMap::new();
+    ifaces.insert("br-lan".to_string(), IfaceStats { rx_bps: 1_250_000, tx_bps: 0 });
+    ifaces.insert("eth0".to_string(), IfaceStats { rx_bps: 0, tx_bps: 62_500 });
+
+    TrafficState {
+        ifaces,
+        devices: HashMap::new(),
+    }
+}

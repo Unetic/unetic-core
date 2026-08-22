@@ -7,6 +7,7 @@ pub mod system;
 pub mod wan;
 pub mod wifi;
 pub mod dns;
+pub mod traffic;
 
 pub use config::*;
 pub use device::*;
@@ -17,3 +18,4 @@ pub use system::*;
 pub use wan::*;
 pub use wifi::*;
 pub use dns::*;
+pub use traffic::*;
