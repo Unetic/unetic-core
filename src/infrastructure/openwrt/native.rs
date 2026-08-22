@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use serde_json::json;
 
-use super::{devices, rpc, wan, wireless};
+use super::{rpc, wan, wireless};
 use crate::{
     domain::errors::{LegacyAppError, ErrorCode, ErrorStage},
     domain::{DiscoveredWan, DiscoveredWifi, WanDesired, WanPublicState, WifiNetworkConfig},

@@ -9,10 +9,10 @@ use std::{
 
 use tokio::sync::broadcast::Sender;
 use serde_json::json;
-use tracing::{error, warn};
+
 
 use crate::{
-    domain::errors::{LegacyAppError, ErrorCode, ErrorStage},
+    domain::errors::LegacyAppError,
 
     domain::{
         DesiredConfig, HealthState, LastOperation, Lifecycle, PublicOperation, PublicState,
@@ -106,7 +106,7 @@ impl App {
     ) -> Arc<Self> {
         let store_ready = store.ensure();
         let store_err = store_ready.as_ref().err().cloned();
-        let (config, lifecycle, init_error) = load_initial_config(backend.as_ref(), &store);
+        let (config, lifecycle, init_error) = config_init::load_initial_config(backend.as_ref(), &store);
         let startup_error = store_err.or(init_error);
 
         let boot_id = generate_id("boot");
@@ -229,6 +229,9 @@ impl App {
         {
             let mut inner = self.inner.lock().unwrap();
             if !inner.pending_extenders.iter().any(|e| e.mac == extender.mac) {
+                if inner.pending_extenders.len() >= 50 {
+                    inner.pending_extenders.remove(0);
+                }
                 inner.pending_extenders.push(extender);
             }
         }
@@ -239,6 +242,15 @@ impl App {
         {
             let mut inner = self.inner.lock().unwrap();
             inner.config.extender_auth_token = Some(token);
+            let _ = self.store.persist_config(&inner.config);
+        }
+        self.publish();
+    }
+
+    pub(crate) fn extender_clear_token(&self) {
+        {
+            let mut inner = self.inner.lock().unwrap();
+            inner.config.extender_auth_token = None;
             let _ = self.store.persist_config(&inner.config);
         }
         self.publish();
@@ -269,49 +281,4 @@ impl App {
     }
 }
 
-fn load_initial_config(
-    backend: &dyn RouterBackend,
-    store: &StateStore,
-) -> (DesiredConfig, Lifecycle, Option<LegacyAppError>) {
-    match store.load_config() {
-        Ok(Some(config)) if config.schema_version == 1 => (config, Lifecycle::Booting, None),
-        Ok(Some(_)) => {
-            warn!("unsupported desired-state schema");
-            let error = LegacyAppError::new(
-                ErrorCode::StateCorrupt,
-                ErrorStage::Bootstrap,
-                "unsupported desired-state schema",
-            );
-            (DesiredConfig::empty(), Lifecycle::Degraded, Some(error))
-        }
-        Ok(None) => discover_default_config(backend, store),
-        Err(error) => {
-            error!(%error, "failed to read desired state from disk");
-            (DesiredConfig::empty(), Lifecycle::Degraded, Some(error))
-        }
-    }
-}
-
-fn discover_default_config(
-    backend: &dyn RouterBackend,
-    store: &StateStore,
-) -> (DesiredConfig, Lifecycle, Option<LegacyAppError>) {
-    match backend.discover_primary_wifi() {
-        Ok(discovered) => {
-            let wan = backend
-                .discover_primary_wan()
-                .map_or_else(|_| crate::domain::WanDesired::default(), |w| w.to_desired());
-            let config = DesiredConfig::new(discovered.to_network_config(), wan);
-            if let Err(error) = store.persist_config(&config) {
-                warn!(%error, "failed to persist discovered default config");
-                (config, Lifecycle::Degraded, Some(error))
-            } else {
-                (config, Lifecycle::Booting, None)
-            }
-        }
-        Err(error) => {
-            warn!(%error, "failed to discover Wi-Fi interfaces during bootstrap");
-            (DesiredConfig::empty(), Lifecycle::NeedsSetup, Some(error))
-        }
-    }
-}
+mod config_init;

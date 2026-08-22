@@ -72,11 +72,13 @@ pub fn start_mesh_sync(app: Arc<App>, mut event_rx: tokio::sync::broadcast::Rece
                                                         }
                                                     }
                                                 },
-                                                Some(networks) = scan_rx.recv() => {
-                                                    let msg = MeshClientMessage::ScanResults { mac: mac_clone_2.clone(), networks };
-                                                    if let Ok(json) = serde_json::to_string(&msg) {
-                                                        if w.write_all(format!("{}\n", json).as_bytes()).await.is_err() {
-                                                            break;
+                                                result = scan_rx.recv() => {
+                                                    if let Some(networks) = result {
+                                                        let msg = MeshClientMessage::ScanResults { mac: mac_clone_2.clone(), networks };
+                                                        if let Ok(json) = serde_json::to_string(&msg) {
+                                                            if w.write_all(format!("{}\n", json).as_bytes()).await.is_err() {
+                                                                break;
+                                                            }
                                                         }
                                                     }
                                                 }
@@ -138,6 +140,8 @@ pub fn start_mesh_sync(app: Arc<App>, mut event_rx: tokio::sync::broadcast::Rece
                                         }
                                         line.clear();
                                     }
+                                } else {
+                                    app.extender_clear_token();
                                 }
                             }
                         }
@@ -253,19 +257,23 @@ pub fn start_mesh_sync(app: Arc<App>, mut event_rx: tokio::sync::broadcast::Rece
                                             line.clear();
                                             loop {
                                                 tokio::select! {
-                                                    Ok(config) = wifi_rx.recv() => {
-                                                        let msg = MeshServerMessage::MasterWifi { config };
-                                                        if let Ok(json) = serde_json::to_string(&msg) {
-                                                            if w.write_all(format!("{}\n", json).as_bytes()).await.is_err() {
-                                                                break;
+                                                    result = wifi_rx.recv() => {
+                                                        if let Ok(config) = result {
+                                                            let msg = MeshServerMessage::MasterWifi { config };
+                                                            if let Ok(json) = serde_json::to_string(&msg) {
+                                                                if w.write_all(format!("{}\n", json).as_bytes()).await.is_err() {
+                                                                    break;
+                                                                }
                                                             }
                                                         }
                                                     }
-                                                    Ok(_) = rrm_rx.recv() => {
-                                                        let msg = MeshServerMessage::CommandScanAirwaves;
-                                                        if let Ok(json) = serde_json::to_string(&msg) {
-                                                            if w.write_all(format!("{}\n", json).as_bytes()).await.is_err() {
-                                                                break;
+                                                    result = rrm_rx.recv() => {
+                                                        if let Ok(_) = result {
+                                                            let msg = MeshServerMessage::CommandScanAirwaves;
+                                                            if let Ok(json) = serde_json::to_string(&msg) {
+                                                                if w.write_all(format!("{}\n", json).as_bytes()).await.is_err() {
+                                                                    break;
+                                                                }
                                                             }
                                                         }
                                                     }

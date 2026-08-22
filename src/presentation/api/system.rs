@@ -18,7 +18,7 @@ pub fn dispatch(app: &Arc<App>, method: &str, request: Value) -> Result<Value, u
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{Arc, mpsc};
+    use std::sync::Arc;
     use crate::infrastructure::backend::memory::MemoryBackend;
     use crate::infrastructure::storage::StateStore;
     use crate::application::app::App;

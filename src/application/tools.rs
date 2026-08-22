@@ -55,7 +55,7 @@ impl App {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{Arc, mpsc};
+    use std::sync::Arc;
 
     use super::*;
     use crate::{MemoryBackend, StateStore};
