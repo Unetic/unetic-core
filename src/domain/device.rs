@@ -1,9 +1,11 @@
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "type")]
 pub enum DeviceConnection {
     Wired { port_id: u8 },
     Wireless { signal_pct: u8 },
+    ViaExtender { extender_mac: String, signal_pct: Option<u8> },
     Unknown,
 }
 

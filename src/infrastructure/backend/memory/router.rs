@@ -260,7 +260,7 @@ impl RouterBackend for MemoryBackend {
         Ok(super::mock::mock_system_info())
     }
 
-    fn read_devices(&self) -> Result<Vec<crate::domain::device::Device>, LegacyAppError> {
+    fn read_devices(&self, _extenders: &[crate::domain::extender::KnownExtender]) -> Result<Vec<crate::domain::device::Device>, LegacyAppError> {
         Ok(super::mock::mock_devices())
     }
 

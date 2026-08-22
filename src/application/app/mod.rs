@@ -202,7 +202,11 @@ impl App {
     }
 
     pub fn devices_list(&self) -> Result<Vec<crate::domain::device::Device>, LegacyAppError> {
-        self.backend.read_devices()
+        let extenders = {
+            let inner = self.inner.lock().unwrap();
+            inner.config.extenders.clone()
+        };
+        self.backend.read_devices(&extenders)
     }
 
     pub fn has_active_subscribers(&self) -> bool {

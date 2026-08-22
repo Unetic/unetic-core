@@ -1,4 +1,5 @@
 pub mod config;
+pub mod extender;
 pub mod device;
 pub mod errors;
 pub mod operation;
@@ -11,6 +12,7 @@ pub mod traffic;
 pub mod ddns;
 
 pub use config::*;
+pub use extender::*;
 pub use device::*;
 pub use errors::*;
 pub use operation::*;

@@ -134,11 +134,20 @@ pub fn merge_devices(
     wireless_macs: HashMap<String, u8>,
     mac_to_iface: HashMap<String, String>,
     ip6_by_mac: HashMap<String, String>,
+    extenders: &[crate::domain::extender::KnownExtender],
 ) -> Vec<Device> {
     let mut all_macs: HashSet<String> = HashSet::new();
     all_macs.extend(arp_entries.keys().cloned());
     all_macs.extend(dhcp_leases.keys().cloned());
     all_macs.extend(ip6_by_mac.keys().cloned());
+
+    let mut iface_to_extender: HashMap<String, String> = HashMap::new();
+    for ext in extenders {
+        let ext_mac = ext.mac.to_lowercase();
+        if let Some(iface) = mac_to_iface.get(&ext_mac) {
+            iface_to_extender.insert(iface.clone(), ext_mac);
+        }
+    }
 
     let mut devices = Vec::new();
     for mac in all_macs {
@@ -153,7 +162,12 @@ pub fn merge_devices(
         }
 
         let hostname = dhcp.and_then(|d| d.hostname.clone());
-        let connection = if let Some(&signal_pct) = wireless_macs.get(&mac) {
+
+        let is_extender = extenders.iter().any(|e| e.mac.eq_ignore_ascii_case(&mac));
+        let connection = if !is_extender && mac_to_iface.get(&mac).and_then(|i| iface_to_extender.get(i)).is_some() {
+            let extender_mac = iface_to_extender[mac_to_iface.get(&mac).unwrap()].clone();
+            crate::domain::device::DeviceConnection::ViaExtender { extender_mac, signal_pct: None }
+        } else if let Some(&signal_pct) = wireless_macs.get(&mac) {
             crate::domain::device::DeviceConnection::Wireless { signal_pct }
         } else if let Some(iface) = mac_to_iface.get(&mac) {
             let port_id = iface.chars().filter(|c| c.is_ascii_digit()).collect::<String>().parse().unwrap_or(0);
@@ -177,7 +191,7 @@ pub fn merge_devices(
     devices
 }
 
-pub fn read_devices() -> Result<Vec<Device>, LegacyAppError> {
+pub fn read_devices(extenders: &[crate::domain::extender::KnownExtender]) -> Result<Vec<Device>, LegacyAppError> {
     let dhcp_content = fs::read_to_string("/tmp/dhcp.leases").unwrap_or_default();
     let arp_content = fs::read_to_string("/proc/net/arp").unwrap_or_default();
     let dhcp_leases = parse_dhcp_leases(&dhcp_content);
@@ -227,7 +241,7 @@ pub fn read_devices() -> Result<Vec<Device>, LegacyAppError> {
         }
     }
 
-    Ok(merge_devices(dhcp_leases, arp_entries, wireless_macs, mac_to_iface, ip6_by_mac))
+    Ok(merge_devices(dhcp_leases, arp_entries, wireless_macs, mac_to_iface, ip6_by_mac, extenders))
 }
 
 #[cfg(test)]
@@ -264,7 +278,8 @@ mod tests {
         let mut ip6_by_mac = HashMap::new();
         ip6_by_mac.insert("00:11:22:33:44:55".into(), "2001:db8::1".into());
 
-        let devices = merge_devices(dhcp, arp, wireless, mac_to_iface, ip6_by_mac);
+        let extenders: Vec<crate::domain::extender::KnownExtender> = Vec::new();
+        let devices = merge_devices(dhcp, arp, wireless, mac_to_iface, ip6_by_mac, &extenders);
         assert_eq!(devices.len(), 3);
         assert_eq!(devices[0].mac, "00:11:22:33:44:55");
         assert_eq!(devices[0].ip, Some("192.168.1.100".into()));

@@ -77,8 +77,8 @@ impl App {
         let (registered_devices, devices) = {
             let inner = self.inner.lock().expect("app state poisoned");
             let registered = inner.config.registered_devices.clone();
-            let devs = self.backend.read_devices()?;
-            (registered, devs)
+            let devices = self.backend.read_devices(&inner.config.extenders)?;
+            (registered, devices)
         };
         self.backend.sync_port_forwards(&registered_devices, &devices)
     }

@@ -108,4 +108,6 @@ pub struct PublicState {
     pub ddns_config: crate::domain::DdnsConfig,
     #[serde(default)]
     pub ddns_status: crate::domain::DdnsStatus,
+    #[serde(default)]
+    pub extenders: Vec<crate::domain::extender::KnownExtender>,
 }
