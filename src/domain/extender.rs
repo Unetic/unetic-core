@@ -6,3 +6,10 @@ pub struct KnownExtender {
     pub ip: String,
     pub model: String,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type")]
+pub enum MeshMessage {
+    MasterWifi { config: crate::domain::wifi::WifiNetworkConfig },
+    ExtenderTelemetry { mac: String, ports: Vec<crate::domain::ports::PhysicalPort> },
+}

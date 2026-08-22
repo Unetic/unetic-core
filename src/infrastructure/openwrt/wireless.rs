@@ -157,6 +157,19 @@ pub fn stage_wifi_config(
         let mut values = serde_json::Map::new();
         values.insert("ssid".into(), json!(config.ssid));
         values.insert("encryption".into(), json!(config.encryption));
+        
+        // Inject 802.11r/k/v options
+        values.insert("ieee80211k".into(), json!("1"));
+        values.insert("ieee80211v".into(), json!("1"));
+        values.insert("bss_transition".into(), json!("1"));
+        values.insert("wnm_sleep_mode".into(), json!("1"));
+        values.insert("ieee80211r".into(), json!("1"));
+        values.insert("ft_over_ds".into(), json!("1"));
+        values.insert("ft_psk_generate_local".into(), json!("1"));
+        
+        let md = format!("{:04x}", config.ssid.bytes().fold(0u16, |acc, b| acc.wrapping_add(b as u16)));
+        values.insert("mobility_domain".into(), json!(md));
+
         if config.encryption != "none"
             && let Some(key) = &config.key
         {

@@ -70,6 +70,7 @@ pub(crate) struct Inner {
     pub repair_failures: u8,
     pub traffic: crate::domain::traffic::TrafficState,
     pub ddns_status: crate::domain::DdnsStatus,
+    pub extender_ports: std::collections::HashMap<String, Vec<crate::domain::ports::PhysicalPort>>,
 }
 
 pub struct App {
@@ -138,6 +139,7 @@ impl App {
                 repair_failures: 0,
                 traffic: crate::domain::traffic::TrafficState::default(),
                 ddns_status: crate::domain::DdnsStatus::default(),
+                extender_ports: std::collections::HashMap::new(),
             }),
             event_tx,
             shutdown: AtomicBool::new(false),
@@ -211,6 +213,14 @@ impl App {
 
     pub fn has_active_subscribers(&self) -> bool {
         self.subscriptions.has_active_subscribers()
+    }
+
+    pub(crate) fn update_extender_ports(&self, mac: String, ports: Vec<crate::domain::ports::PhysicalPort>) {
+        {
+            let mut inner = self.inner.lock().unwrap();
+            inner.extender_ports.insert(mac, ports);
+        }
+        self.publish();
     }
 }
 

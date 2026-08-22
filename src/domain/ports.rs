@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum PortType {
     #[serde(rename = "wan")]
     Wan,
@@ -8,7 +8,7 @@ pub enum PortType {
     Lan,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[repr(u32)]
 pub enum PortSpeed {
     NoLink = 0,
@@ -20,14 +20,14 @@ pub enum PortSpeed {
     Speed10000 = 10000,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PortConnection {
     pub mac: String,
     pub ip: Option<String>,
     pub hostname: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PhysicalPort {
     pub id: String,
     pub name: String,

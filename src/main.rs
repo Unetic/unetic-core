@@ -50,5 +50,7 @@ async fn main() -> Result<()> {
         unetic_core::application::traffic_sampler::start_traffic_sampler(Arc::clone(&app));
     }
 
+    unetic_core::application::mesh_sync::start_mesh_sync(Arc::clone(&app), event_tx.subscribe());
+
     run_event_loop(app, event_rx, is_memory).await
 }

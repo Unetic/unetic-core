@@ -110,4 +110,6 @@ pub struct PublicState {
     pub ddns_status: crate::domain::DdnsStatus,
     #[serde(default)]
     pub extenders: Vec<crate::domain::extender::KnownExtender>,
+    #[serde(default)]
+    pub extender_ports: std::collections::HashMap<String, Vec<crate::domain::ports::PhysicalPort>>,
 }
