@@ -8,6 +8,7 @@ pub mod wan;
 pub mod wifi;
 pub mod dns;
 pub mod traffic;
+pub mod ddns;
 
 pub use config::*;
 pub use device::*;
@@ -19,3 +20,4 @@ pub use wan::*;
 pub use wifi::*;
 pub use dns::*;
 pub use traffic::*;
+pub use ddns::*;

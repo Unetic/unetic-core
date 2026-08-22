@@ -206,4 +206,5 @@ impl RouterBackend for OpenWrtBackend {
     fn write_dns_config(&self, cfg: &crate::domain::DnsConfig) -> Result<(), LegacyAppError> {
         super::dns::write_dns_config(cfg)
     }
+    fn write_ddns_config(&self, _cfg: &crate::domain::DdnsConfig) -> Result<(), crate::domain::errors::LegacyAppError> { Ok(()) }
 }

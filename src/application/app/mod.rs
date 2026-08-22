@@ -1,13 +1,13 @@
 use std::{
     collections::BTreeMap,
     sync::{
-        Arc, Mutex,
         atomic::{AtomicBool, AtomicUsize, Ordering},
-        mpsc::Sender,
+        Arc, Mutex,
     },
     time::Duration,
 };
 
+use tokio::sync::broadcast::Sender;
 use serde_json::json;
 use tracing::{error, warn};
 
@@ -69,6 +69,7 @@ pub(crate) struct Inner {
     pub health: HealthState,
     pub repair_failures: u8,
     pub traffic: crate::domain::traffic::TrafficState,
+    pub ddns_status: crate::domain::DdnsStatus,
 }
 
 pub struct App {
@@ -136,6 +137,7 @@ impl App {
                 },
                 repair_failures: 0,
                 traffic: crate::domain::traffic::TrafficState::default(),
+                ddns_status: crate::domain::DdnsStatus::default(),
             }),
             event_tx,
             shutdown: AtomicBool::new(false),

@@ -2,7 +2,7 @@
 
 use std::{
     path::PathBuf,
-    sync::{Arc, mpsc},
+    sync::Arc,
 };
 
 use anyhow::{Context, Result};
@@ -39,9 +39,11 @@ async fn main() -> Result<()> {
             Arc::new(OpenWrtBackend::new().context("failed to initialize OpenWrt backend")?)
         };
 
-    let (event_tx, event_rx) = mpsc::channel();
-    let app = App::bootstrap(backend, StateStore::new(state_dir), event_tx);
+    let (event_tx, event_rx) = tokio::sync::broadcast::channel(128);
+    let app = App::bootstrap(backend, StateStore::new(state_dir), event_tx.clone());
     app.start_background();
+
+    unetic_core::application::ddns_watcher::start_ddns_watcher(Arc::clone(&app), event_tx.subscribe());
 
     if !is_memory {
         unetic_core::infrastructure::openwrt::netlink::start_neighbor_listener(Arc::clone(&app));

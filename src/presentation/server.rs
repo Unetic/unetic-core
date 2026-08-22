@@ -1,4 +1,5 @@
-use std::{sync::Arc, sync::mpsc::Receiver, time::Duration};
+use std::{sync::Arc, time::Duration};
+use tokio::sync::broadcast::Receiver;
 use tracing::{error, info, warn};
 use unetic_openwrt_sys::Bridge;
 
@@ -6,7 +7,7 @@ use crate::application::app::App;
 use crate::presentation::api;
 use crate::domain::PublicState;
 
-pub async fn run_event_loop(app: Arc<App>, event_rx: Receiver<PublicState>, is_memory: bool) -> anyhow::Result<()> {
+pub async fn run_event_loop(app: Arc<App>, mut event_rx: Receiver<PublicState>, is_memory: bool) -> anyhow::Result<()> {
     if is_memory {
         info!("memory backend is active; ubus server is disabled");
         wait_for_signal().await;

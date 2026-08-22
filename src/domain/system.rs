@@ -104,4 +104,8 @@ pub struct PublicState {
     pub dns: crate::domain::DnsConfig,
     #[serde(default)]
     pub traffic: crate::domain::traffic::TrafficState,
+    #[serde(default)]
+    pub ddns_config: crate::domain::DdnsConfig,
+    #[serde(default)]
+    pub ddns_status: crate::domain::DdnsStatus,
 }

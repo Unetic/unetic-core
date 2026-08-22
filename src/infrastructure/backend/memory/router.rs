@@ -279,4 +279,5 @@ impl RouterBackend for MemoryBackend {
     fn write_dns_config(&self, _cfg: &crate::domain::DnsConfig) -> Result<(), LegacyAppError> {
         Ok(())
     }
+    fn write_ddns_config(&self, _cfg: &crate::domain::DdnsConfig) -> Result<(), crate::domain::errors::LegacyAppError> { Ok(()) }
 }

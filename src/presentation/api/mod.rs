@@ -13,6 +13,7 @@ pub mod wan;
 pub mod wifi;
 pub mod devices;
 pub mod dns;
+pub mod ddns;
 
 #[derive(Serialize)]
 pub struct ApiEnvelope<T> {
@@ -63,6 +64,8 @@ pub fn dispatch(app: &Arc<App>, method: &str, request_json: &str) -> String {
         devices::dispatch(app, method, request)
     } else if method.starts_with("dns.") {
         dns::dispatch(app, method, request)
+    } else if method.starts_with("ddns.") {
+        ddns::dispatch(app, method, request)
     } else {
         system::dispatch(app, method, request)
     };

@@ -18,7 +18,7 @@ fn test_app() -> Arc<App> {
         "Home",
         &["default_radio0", "default_radio1"],
     ));
-    let (tx, _rx) = mpsc::channel();
+    let (tx, _rx) = tokio::sync::broadcast::channel(16);
     let timing = Timing {
         reconcile_interval: Duration::from_millis(20),
         verify_timeout: Duration::from_millis(100),

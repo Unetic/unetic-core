@@ -27,7 +27,7 @@ mod tests {
     #[test]
     fn test_api_dispatch_devices_list() {
         let backend = Arc::new(MemoryBackend::new("Home", &["radio0"]));
-        let (tx, _rx) = mpsc::channel();
+        let (tx, _rx) = tokio::sync::broadcast::channel(16);
         let store = StateStore::new(std::env::temp_dir().join("unetic-test-devices-list-api-new"));
         let app = App::bootstrap(backend, store, tx);
 

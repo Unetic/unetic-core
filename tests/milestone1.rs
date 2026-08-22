@@ -18,7 +18,7 @@ fn test_app() -> (Arc<App>, Arc<MemoryBackend>) {
         "Home",
         &["default_radio0", "default_radio1"],
     ));
-    let (tx, _rx) = mpsc::channel();
+    let (tx, _rx) = tokio::sync::broadcast::channel(16);
     let timing = Timing {
         reconcile_interval: Duration::from_millis(20),
         verify_timeout: Duration::from_millis(100),
@@ -411,7 +411,7 @@ fn crash_recovery_reports_interrupted_uncommitted_user_operation() {
         })
         .expect("journal");
 
-    let (tx, _rx) = mpsc::channel();
+    let (tx, _rx) = tokio::sync::broadcast::channel(16);
     let app = App::bootstrap(backend, store, tx);
     let last = app.state().last_user_operation.expect("recovered result");
     assert_eq!(last.status, OperationStatus::Failed);
@@ -470,7 +470,7 @@ fn crash_recovery_finishes_durable_user_intent() {
         })
         .expect("journal");
 
-    let (tx, _rx) = mpsc::channel();
+    let (tx, _rx) = tokio::sync::broadcast::channel(16);
     let app = App::bootstrap(backend, store, tx);
     let last = app.state().last_user_operation.expect("recovered result");
     assert_eq!(last.status, OperationStatus::Succeeded);
@@ -650,7 +650,7 @@ fn rollback_failure_transitions_to_degraded() {
 #[test]
 fn bootstrap_without_targets_sets_lifecycle_needs_setup() {
     let backend = Arc::new(MemoryBackend::new("Home", &[]));
-    let (tx, _rx) = mpsc::channel();
+    let (tx, _rx) = tokio::sync::broadcast::channel(16);
     let root = std::env::temp_dir().join(format!(
         "unetic-test-bootstrap-{}",
         SystemTime::now()

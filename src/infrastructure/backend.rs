@@ -41,6 +41,7 @@ pub trait RouterBackend: Send + Sync {
     fn sync_port_forwards(&self, registered_devices: &[crate::domain::device::RegisteredDevice], current_devices: &[crate::domain::device::Device]) -> Result<(), LegacyAppError>;
     fn read_dns_config(&self) -> Result<crate::domain::DnsConfig, LegacyAppError>;
     fn write_dns_config(&self, cfg: &crate::domain::DnsConfig) -> Result<(), LegacyAppError>;
+    fn write_ddns_config(&self, cfg: &crate::domain::DdnsConfig) -> Result<(), LegacyAppError>;
 
     fn read_ssids(
         &self,
