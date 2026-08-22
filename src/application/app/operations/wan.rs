@@ -1,9 +1,10 @@
 use tracing::error;
 
 use crate::{
-    application::app::{App, Inner, state::now_ms},
+    application::app::{App, Inner},
+    application::state::now_ms,
     application::wan::WanChangeContext,
-    domain::errors::{DomainError, ErrorCode, ErrorStage},
+    domain::errors::{LegacyAppError, ErrorCode, ErrorStage},
     domain::{LastOperation, Lifecycle, OperationSource, OperationStatus},
 };
 
@@ -11,7 +12,7 @@ impl App {
     pub(crate) fn persist_new_desired_wan(
         &self,
         context: &WanChangeContext,
-    ) -> Result<(), DomainError> {
+    ) -> Result<(), LegacyAppError> {
         let mut config = {
             let inner = self.inner.lock().expect("app state poisoned");
             inner.config.clone()
@@ -30,7 +31,7 @@ impl App {
     pub(crate) fn complete_wan_success(
         &self,
         context: &WanChangeContext,
-    ) -> Result<(), DomainError> {
+    ) -> Result<(), LegacyAppError> {
         let revision = self
             .inner
             .lock()
@@ -59,7 +60,7 @@ impl App {
     pub(crate) fn complete_wan_failure(
         &self,
         context: &WanChangeContext,
-        error: DomainError,
+        error: LegacyAppError,
         rollback_failed: bool,
     ) {
         let error = error.with_operation(&context.operation_id, context.request_id.as_deref());
@@ -102,8 +103,8 @@ impl App {
         self.publish();
     }
 
-    pub(crate) fn mark_wan_commit_uncertain(&self, context: &WanChangeContext, error: DomainError) {
-        let uncertain = DomainError::new(
+    pub(crate) fn mark_wan_commit_uncertain(&self, context: &WanChangeContext, error: LegacyAppError) {
+        let uncertain = LegacyAppError::new(
             ErrorCode::CommitUncertain,
             ErrorStage::Confirm,
             format!(
@@ -145,7 +146,7 @@ fn make_wan_last_op(
     context: &WanChangeContext,
     status: OperationStatus,
     revision: u64,
-    error: Option<DomainError>,
+    error: Option<LegacyAppError>,
 ) -> LastOperation {
     LastOperation {
         id: context.operation_id.clone(),
@@ -165,7 +166,7 @@ fn apply_wan_success_state(
     context: &WanChangeContext,
     last: LastOperation,
     wan_status: crate::domain::WanPublicState,
-    store_error: Option<DomainError>,
+    store_error: Option<LegacyAppError>,
 ) {
     if context.source == OperationSource::User {
         inner.last_user_operation = Some(last);
@@ -195,14 +196,14 @@ fn apply_wan_failure_state(
     context: &WanChangeContext,
     last: LastOperation,
     wan_status: crate::domain::WanPublicState,
-    error: DomainError,
+    error: LegacyAppError,
     rollback_failed: bool,
     store_failed: bool,
 ) {
     if context.source == OperationSource::User {
         inner.last_user_operation = Some(last);
         if store_failed {
-            inner.last_system_error = Some(DomainError::new(
+            inner.last_system_error = Some(LegacyAppError::new(
                 ErrorCode::StateStoreFailed,
                 ErrorStage::Persist,
                 "failed to clear transaction journal",

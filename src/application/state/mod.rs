@@ -8,9 +8,9 @@ use std::{
 use serde_json::json;
 use tracing::warn;
 
-use super::{App, Inner};
+use crate::application::app::{App, Inner};
 use crate::{
-    domain::errors::{DomainError, ErrorCode, ErrorStage},
+    domain::errors::{LegacyAppError, ErrorCode, ErrorStage},
     domain::{
         DriftState, MaintenanceState, PublicState, WifiNetworkConfig, WifiPublicState,
         WifiStatus,
@@ -97,7 +97,7 @@ impl App {
     }
 }
 
-pub(crate) fn snapshot(inner: &Inner) -> PublicState {
+pub fn snapshot(inner: &Inner) -> PublicState {
     let desired = &inner.config.wifi.primary;
     let mut drift_fields: Vec<String> = Vec::new();
     for target in &desired.targets {
@@ -165,7 +165,7 @@ pub(crate) fn snapshot(inner: &Inner) -> PublicState {
     }
 }
 
-pub(crate) fn all_equal_config(
+pub fn all_equal_config(
     observed: &BTreeMap<String, WifiNetworkConfig>,
     targets: &[String],
     expected: &WifiNetworkConfig,
@@ -180,16 +180,16 @@ pub(crate) fn all_equal_config(
         })
 }
 
-pub(crate) fn validate_ssid(ssid: &str) -> Result<(), DomainError> {
+pub fn validate_ssid(ssid: &str) -> Result<(), LegacyAppError> {
     if ssid.is_empty() {
-        return Err(DomainError::new(
+        return Err(LegacyAppError::new(
             ErrorCode::InvalidArgument,
             ErrorStage::Validate,
             "SSID must not be empty",
         ));
     }
     if ssid.len() > 32 {
-        return Err(DomainError::new(
+        return Err(LegacyAppError::new(
             ErrorCode::InvalidArgument,
             ErrorStage::Validate,
             "SSID must be at most 32 UTF-8 bytes",
@@ -197,7 +197,7 @@ pub(crate) fn validate_ssid(ssid: &str) -> Result<(), DomainError> {
         .details(json!({"bytes": ssid.len()})));
     }
     if ssid.contains('\0') {
-        return Err(DomainError::new(
+        return Err(LegacyAppError::new(
             ErrorCode::InvalidArgument,
             ErrorStage::Validate,
             "SSID must not contain NUL",
@@ -206,29 +206,29 @@ pub(crate) fn validate_ssid(ssid: &str) -> Result<(), DomainError> {
     Ok(())
 }
 
-pub(crate) fn validate_wifi_config(
+pub fn validate_wifi_config(
     ssid: &str,
     encryption: &str,
     key: Option<&str>,
-) -> Result<(), DomainError> {
+) -> Result<(), LegacyAppError> {
     validate_ssid(ssid)?;
     if encryption != "none" {
         let Some(key) = key else {
-            return Err(DomainError::new(
+            return Err(LegacyAppError::new(
                 ErrorCode::InvalidArgument,
                 ErrorStage::Validate,
                 "key must be provided when encryption is not 'none'",
             ));
         };
         if key.len() < 8 || key.len() > 63 {
-            return Err(DomainError::new(
+            return Err(LegacyAppError::new(
                 ErrorCode::InvalidArgument,
                 ErrorStage::Validate,
                 "key must be between 8 and 63 characters long",
             ));
         }
         if key.contains('\0') {
-            return Err(DomainError::new(
+            return Err(LegacyAppError::new(
                 ErrorCode::InvalidArgument,
                 ErrorStage::Validate,
                 "key must not contain NUL",
@@ -238,14 +238,14 @@ pub(crate) fn validate_wifi_config(
     Ok(())
 }
 
-pub(crate) fn generate_id(prefix: &str) -> String {
+pub fn generate_id(prefix: &str) -> String {
     if let Ok(value) = fs::read_to_string("/proc/sys/kernel/random/uuid") {
         return format!("{prefix}-{}", value.trim());
     }
     format!("{prefix}-{}-{}", std::process::id(), now_ms())
 }
 
-pub(crate) fn now_ms() -> u64 {
+pub fn now_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |duration| {

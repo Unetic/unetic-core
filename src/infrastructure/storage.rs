@@ -7,7 +7,7 @@ use std::{
 use serde::{Serialize, de::DeserializeOwned};
 
 use crate::{
-    domain::errors::{DomainError, ErrorCode, ErrorStage},
+    domain::errors::{LegacyAppError, ErrorCode, ErrorStage},
     domain::{DesiredConfig, TransactionJournal},
 };
 
@@ -22,7 +22,7 @@ impl StateStore {
         Self { root: root.into() }
     }
 
-    pub fn ensure(&self) -> Result<(), DomainError> {
+    pub fn ensure(&self) -> Result<(), LegacyAppError> {
         fs::create_dir_all(&self.root).map_err(store_error)?;
         #[cfg(unix)]
         {
@@ -40,23 +40,23 @@ impl StateStore {
         Ok(())
     }
 
-    pub fn load_config(&self) -> Result<Option<DesiredConfig>, DomainError> {
+    pub fn load_config(&self) -> Result<Option<DesiredConfig>, LegacyAppError> {
         self.read_json("config.json")
     }
 
-    pub fn persist_config(&self, value: &DesiredConfig) -> Result<(), DomainError> {
+    pub fn persist_config(&self, value: &DesiredConfig) -> Result<(), LegacyAppError> {
         self.write_json("config.json", value)
     }
 
-    pub fn load_transaction(&self) -> Result<Option<TransactionJournal>, DomainError> {
+    pub fn load_transaction(&self) -> Result<Option<TransactionJournal>, LegacyAppError> {
         self.read_json("transaction.json")
     }
 
-    pub fn persist_transaction(&self, value: &TransactionJournal) -> Result<(), DomainError> {
+    pub fn persist_transaction(&self, value: &TransactionJournal) -> Result<(), LegacyAppError> {
         self.write_json("transaction.json", value)
     }
 
-    pub fn clear_transaction(&self) -> Result<(), DomainError> {
+    pub fn clear_transaction(&self) -> Result<(), LegacyAppError> {
         let path = self.root.join("transaction.json");
         match fs::remove_file(&path) {
             Ok(()) => self.sync_dir(),
@@ -65,7 +65,7 @@ impl StateStore {
         }
     }
 
-    fn read_json<T: DeserializeOwned>(&self, name: &str) -> Result<Option<T>, DomainError> {
+    fn read_json<T: DeserializeOwned>(&self, name: &str) -> Result<Option<T>, LegacyAppError> {
         let path = self.root.join(name);
         let bytes = match fs::read(&path) {
             Ok(bytes) => bytes,
@@ -73,7 +73,7 @@ impl StateStore {
             Err(error) => return Err(store_error(error)),
         };
         serde_json::from_slice(&bytes).map(Some).map_err(|error| {
-            DomainError::new(
+            LegacyAppError::new(
                 ErrorCode::StateCorrupt,
                 ErrorStage::Persist,
                 format!("failed to parse {}: {error}", path.display()),
@@ -81,12 +81,12 @@ impl StateStore {
         })
     }
 
-    fn write_json<T: Serialize>(&self, name: &str, value: &T) -> Result<(), DomainError> {
+    fn write_json<T: Serialize>(&self, name: &str, value: &T) -> Result<(), LegacyAppError> {
         self.ensure()?;
         let path = self.root.join(name);
         let tmp = self.root.join(format!("{name}.tmp"));
         let data = serde_json::to_vec_pretty(value).map_err(|error| {
-            DomainError::new(
+            LegacyAppError::new(
                 ErrorCode::StateStoreFailed,
                 ErrorStage::Persist,
                 format!("failed to serialize state: {error}"),
@@ -114,7 +114,7 @@ impl StateStore {
         self.sync_dir()
     }
 
-    fn sync_dir(&self) -> Result<(), DomainError> {
+    fn sync_dir(&self) -> Result<(), LegacyAppError> {
         File::open(&self.root)
             .and_then(|dir| dir.sync_all())
             .map_err(store_error)
@@ -126,8 +126,8 @@ impl StateStore {
     }
 }
 
-fn store_error(error: io::Error) -> DomainError {
-    DomainError::new(
+fn store_error(error: io::Error) -> LegacyAppError {
+    LegacyAppError::new(
         ErrorCode::StateStoreFailed,
         ErrorStage::Persist,
         error.to_string(),

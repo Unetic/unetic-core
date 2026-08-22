@@ -1,45 +1,59 @@
 use crate::{
     domain::device::Device,
-    domain::switch::{
-        SwitchArchitecture, SwitchFeatureStatus, SwitchFeatures, SwitchInfo, SwitchSocInfo,
-    },
+
     domain::system::SystemInfo,
 };
 
-pub(crate) fn mock_switch_info() -> SwitchInfo {
-    SwitchInfo {
-        soc: SwitchSocInfo {
-            model: "mt7531".into(),
-            vendor: "MediaTek".into(),
-            compatible: Some("mediatek,mt7531".into()),
-            driver: Some("mt7530-mdio".into()),
-            architecture: SwitchArchitecture::Dsa,
-            tagging_protocol: Some("mtk".into()),
-            ports: vec![
-                "lan1".into(),
-                "lan2".into(),
-                "lan3".into(),
-                "lan4".into(),
-                "wan".into(),
+pub(crate) fn mock_ports_info() -> Vec<crate::domain::ports::PhysicalPort> {
+    use crate::domain::ports::{PhysicalPort, PortConnection, PortSpeed, PortType};
+    vec![
+        PhysicalPort {
+            id: "wan".to_string(),
+            name: "wan".to_string(),
+            port_type: PortType::Wan,
+            speed: PortSpeed::Speed1000,
+            connections: vec![],
+        },
+        PhysicalPort {
+            id: "lan1".to_string(),
+            name: "lan1".to_string(),
+            port_type: PortType::Lan,
+            speed: PortSpeed::Speed1000,
+            connections: vec![],
+        },
+        PhysicalPort {
+            id: "lan2".to_string(),
+            name: "lan2".to_string(),
+            port_type: PortType::Lan,
+            speed: PortSpeed::Speed1000,
+            connections: vec![
+                PortConnection {
+                    mac: "66:77:88:99:aa:bb".to_string(),
+                    ip: Some("192.168.1.101".to_string()),
+                    hostname: Some("Desktop-PC".to_string()),
+                },
+                PortConnection {
+                    mac: "11:22:33:44:55:66".to_string(),
+                    ip: Some("192.168.1.103".to_string()),
+                    hostname: Some("Switch-Downstream".to_string()),
+                }
             ],
         },
-        features: SwitchFeatures {
-            l2_hw_switching: SwitchFeatureStatus::static_hw(true),
-            l3_hw_flow_offload: SwitchFeatureStatus::new(true, true, true),
-            l3_sw_flow_offload: SwitchFeatureStatus::new(true, true, true),
-            vlan_filtering_8021q: SwitchFeatureStatus::new(true, false, true),
-            port_isolation: SwitchFeatureStatus::new(true, false, true),
-            hw_igmp_snooping: SwitchFeatureStatus::new(true, true, true),
-            flow_control_8023x: SwitchFeatureStatus::new(true, false, true),
-            eee_8023az: SwitchFeatureStatus::new(true, false, true),
-            stp_rstp: SwitchFeatureStatus::new(true, false, true),
-            mirroring_span: SwitchFeatureStatus::new(true, false, true),
-            jumbo_frames: SwitchFeatureStatus::new(true, false, true),
-            link_aggregation_lag: SwitchFeatureStatus::new(true, false, true),
-            tdr_cable_diag: SwitchFeatureStatus::static_hw(true),
-            hardware_stats: SwitchFeatureStatus::static_hw(true),
+        PhysicalPort {
+            id: "lan3".to_string(),
+            name: "lan3".to_string(),
+            port_type: PortType::Lan,
+            speed: PortSpeed::NoLink,
+            connections: vec![],
         },
-    }
+        PhysicalPort {
+            id: "lan4".to_string(),
+            name: "lan4".to_string(),
+            port_type: PortType::Lan,
+            speed: PortSpeed::NoLink,
+            connections: vec![],
+        },
+    ]
 }
 
 pub(crate) fn mock_system_info() -> SystemInfo {

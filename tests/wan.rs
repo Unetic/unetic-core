@@ -156,9 +156,10 @@ fn test_api_set_wan_extender_success() {
 #[test]
 fn test_api_dispatch_wan_set_extender() {
     let app = test_app();
-    let payload = json!({
+    let payload = serde_json::json!({
+        "idempotence_token": "xyz",
+        "request_id": "req-1",
         "expected_revision": 1,
-        "request_id": "req-wan-extender-json",
         "wan": {
             "present": true,
             "proto": "extender"
@@ -169,8 +170,8 @@ fn test_api_dispatch_wan_set_extender() {
     let response = api::dispatch(&app, "wan.set", &payload);
     let val: serde_json::Value = serde_json::from_str(&response).expect("valid json response");
     assert_eq!(
-        val.get("ok").and_then(serde_json::Value::as_bool),
-        Some(true)
+        val.get("error").and_then(serde_json::Value::as_u64),
+        Some(0)
     );
 
     wait_for_idle(&app);

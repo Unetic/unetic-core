@@ -4,7 +4,7 @@ use tracing::{error, info, warn};
 
 use crate::{
     application::app::App,
-    domain::errors::{DomainError, ErrorCode, ErrorStage},
+    domain::errors::{LegacyAppError, ErrorCode, ErrorStage},
     domain::{
         OperationSource, OperationStatus, PublicOperation, STATE_SCHEMA_VERSION,
         TransactionJournal, WifiNetworkConfig,
@@ -25,7 +25,7 @@ pub struct ChangeContext {
 
 impl ChangeContext {
     #[must_use]
-    pub fn public(&self, status: OperationStatus, error: Option<DomainError>) -> PublicOperation {
+    pub fn public(&self, status: OperationStatus, error: Option<LegacyAppError>) -> PublicOperation {
         PublicOperation {
             id: self.operation_id.clone(),
             request_id: self.request_id.clone(),
@@ -75,7 +75,7 @@ pub fn run_change(app: Arc<App>, context: ChangeContext) {
     }
 }
 
-fn execute(app: &Arc<App>, context: &ChangeContext) -> Result<(), DomainError> {
+fn execute(app: &Arc<App>, context: &ChangeContext) -> Result<(), LegacyAppError> {
     let session = crate::infrastructure::backend::SessionGuard::new(app.backend.as_ref()).map_err(
         |error| error.with_operation(&context.operation_id, context.request_id.as_deref()),
     )?;
@@ -113,7 +113,7 @@ fn stage_and_verify(
     app: &Arc<App>,
     context: &ChangeContext,
     session_id: &str,
-) -> Result<(), DomainError> {
+) -> Result<(), LegacyAppError> {
     app.set_operation_status(context, OperationStatus::Staging, None)?;
     app.backend
         .stage_wifi_config(session_id, &context.targets, &context.new_wifi)?;
@@ -131,7 +131,7 @@ fn stage_and_verify(
     });
 
     if mismatch {
-        return Err(DomainError::new(
+        return Err(LegacyAppError::new(
             ErrorCode::UciStageMismatch,
             ErrorStage::Stage,
             "staged UCI values do not match requested Wi-Fi configuration",
@@ -145,7 +145,7 @@ fn apply_and_verify(
     app: &Arc<App>,
     context: &ChangeContext,
     session_id: &str,
-) -> Result<(), DomainError> {
+) -> Result<(), LegacyAppError> {
     app.set_operation_status(context, OperationStatus::Applying, None)?;
     if let Err(error) = app
         .backend
@@ -169,7 +169,7 @@ fn persist_and_confirm(
     app: &Arc<App>,
     context: &ChangeContext,
     session_id: &str,
-) -> Result<(), DomainError> {
+) -> Result<(), LegacyAppError> {
     if context.source == OperationSource::User {
         app.set_operation_status(context, OperationStatus::Persisting, None)?;
         app.persist_new_desired(context)?;
@@ -183,7 +183,7 @@ fn rollback_to_old(
     app: &Arc<App>,
     context: &ChangeContext,
     session: &str,
-    original_error: DomainError,
+    original_error: LegacyAppError,
 ) {
     warn!(%original_error, "rolling configuration back");
     let _ = app.set_operation_status(
@@ -197,7 +197,7 @@ fn rollback_to_old(
             "{}; rollback failed: {}",
             original_error.message, rollback_error.message
         );
-        let err = DomainError::new(ErrorCode::RollbackFailed, ErrorStage::Rollback, msg);
+        let err = LegacyAppError::new(ErrorCode::RollbackFailed, ErrorStage::Rollback, msg);
         app.complete_failure(context, attach(err, context), true);
         return;
     }
@@ -213,7 +213,7 @@ fn rollback_to_old(
             "{}; rollback verification failed: {}",
             original_error.message, error.message
         );
-        let err = DomainError::new(ErrorCode::RollbackFailed, ErrorStage::Rollback, msg);
+        let err = LegacyAppError::new(ErrorCode::RollbackFailed, ErrorStage::Rollback, msg);
         app.complete_failure(context, attach(err, context), true);
         return;
     }
@@ -225,6 +225,6 @@ pub mod sync;
 use sync::verify;
 pub use sync::{force_state_sync, run_recovery_sync};
 
-fn attach(error: DomainError, context: &ChangeContext) -> DomainError {
+fn attach(error: LegacyAppError, context: &ChangeContext) -> LegacyAppError {
     error.with_operation(&context.operation_id, context.request_id.as_deref())
 }

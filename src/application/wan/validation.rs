@@ -1,13 +1,13 @@
 use std::net::Ipv4Addr;
 
 use crate::{
-    domain::errors::{DomainError, ErrorCode, ErrorStage},
+    domain::errors::{LegacyAppError, ErrorCode, ErrorStage},
     domain::{SetWanRequest, WanDesired, WanProtocol},
 };
 
-pub fn validate_wan_request(request: &SetWanRequest) -> Result<(), DomainError> {
+pub fn validate_wan_request(request: &SetWanRequest) -> Result<(), LegacyAppError> {
     if request.request_id.trim().is_empty() || request.request_id.len() > 128 {
-        return Err(DomainError::new(
+        return Err(LegacyAppError::new(
             ErrorCode::InvalidArgument,
             ErrorStage::Validate,
             "request_id must be between 1 and 128 characters",
@@ -16,14 +16,14 @@ pub fn validate_wan_request(request: &SetWanRequest) -> Result<(), DomainError> 
     validate_wan_desired(&request.wan)
 }
 
-pub fn validate_wan_desired(desired: &WanDesired) -> Result<(), DomainError> {
+pub fn validate_wan_desired(desired: &WanDesired) -> Result<(), LegacyAppError> {
     if !desired.present {
         return Ok(());
     }
 
     match desired.proto {
         WanProtocol::None => {
-            return Err(DomainError::new(
+            return Err(LegacyAppError::new(
                 ErrorCode::InvalidArgument,
                 ErrorStage::Validate,
                 "WAN protocol must be specified when WAN is present",
@@ -32,7 +32,7 @@ pub fn validate_wan_desired(desired: &WanDesired) -> Result<(), DomainError> {
         WanProtocol::Dhcp | WanProtocol::Extender => {}
         WanProtocol::Static => {
             let Some(static_cfg) = &desired.static_config else {
-                return Err(DomainError::new(
+                return Err(LegacyAppError::new(
                     ErrorCode::InvalidArgument,
                     ErrorStage::Validate,
                     "static_config is required when WAN protocol is static",
@@ -42,7 +42,7 @@ pub fn validate_wan_desired(desired: &WanDesired) -> Result<(), DomainError> {
         }
         WanProtocol::Pppoe => {
             let Some(pppoe_cfg) = &desired.pppoe_config else {
-                return Err(DomainError::new(
+                return Err(LegacyAppError::new(
                     ErrorCode::InvalidArgument,
                     ErrorStage::Validate,
                     "pppoe_config is required when WAN protocol is pppoe",
@@ -67,13 +67,13 @@ pub fn validate_wan_desired(desired: &WanDesired) -> Result<(), DomainError> {
     Ok(())
 }
 
-fn validate_static_config(config: &crate::domain::WanStaticConfig) -> Result<(), DomainError> {
+fn validate_static_config(config: &crate::domain::WanStaticConfig) -> Result<(), LegacyAppError> {
     let ip = validate_ipv4(&config.ip_address, "IP address")?;
     let mask = validate_netmask(&config.netmask)?;
     let gw = validate_ipv4(&config.gateway, "gateway")?;
 
     if (u32::from(ip) & u32::from(mask)) != (u32::from(gw) & u32::from(mask)) {
-        return Err(DomainError::new(
+        return Err(LegacyAppError::new(
             ErrorCode::InvalidArgument,
             ErrorStage::Validate,
             "gateway IP is outside the specified subnet",
@@ -87,9 +87,9 @@ fn validate_static_config(config: &crate::domain::WanStaticConfig) -> Result<(),
     Ok(())
 }
 
-fn validate_pppoe_config(config: &crate::domain::WanPppoeConfig) -> Result<(), DomainError> {
+fn validate_pppoe_config(config: &crate::domain::WanPppoeConfig) -> Result<(), LegacyAppError> {
     if config.username.trim().is_empty() || config.username.len() > 128 {
-        return Err(DomainError::new(
+        return Err(LegacyAppError::new(
             ErrorCode::InvalidArgument,
             ErrorStage::Validate,
             "PPPoE username must be between 1 and 128 characters",
@@ -99,7 +99,7 @@ fn validate_pppoe_config(config: &crate::domain::WanPppoeConfig) -> Result<(), D
     if let Some(pass) = &config.password
         && pass.len() > 128
     {
-        return Err(DomainError::new(
+        return Err(LegacyAppError::new(
             ErrorCode::InvalidArgument,
             ErrorStage::Validate,
             "PPPoE password must be at most 128 characters",
@@ -109,9 +109,9 @@ fn validate_pppoe_config(config: &crate::domain::WanPppoeConfig) -> Result<(), D
     Ok(())
 }
 
-fn validate_ipv4(value: &str, field_name: &str) -> Result<Ipv4Addr, DomainError> {
+fn validate_ipv4(value: &str, field_name: &str) -> Result<Ipv4Addr, LegacyAppError> {
     let ip: Ipv4Addr = value.parse().map_err(|_| {
-        DomainError::new(
+        LegacyAppError::new(
             ErrorCode::InvalidArgument,
             ErrorStage::Validate,
             format!("invalid IPv4 format for {field_name}: '{value}'"),
@@ -119,7 +119,7 @@ fn validate_ipv4(value: &str, field_name: &str) -> Result<Ipv4Addr, DomainError>
     })?;
 
     if ip.is_unspecified() || ip.is_loopback() || ip.is_multicast() {
-        return Err(DomainError::new(
+        return Err(LegacyAppError::new(
             ErrorCode::InvalidArgument,
             ErrorStage::Validate,
             format!("{field_name} cannot be unspecified, loopback, or multicast"),
@@ -129,9 +129,9 @@ fn validate_ipv4(value: &str, field_name: &str) -> Result<Ipv4Addr, DomainError>
     Ok(ip)
 }
 
-fn validate_netmask(value: &str) -> Result<Ipv4Addr, DomainError> {
+fn validate_netmask(value: &str) -> Result<Ipv4Addr, LegacyAppError> {
     let mask: Ipv4Addr = value.parse().map_err(|_| {
-        DomainError::new(
+        LegacyAppError::new(
             ErrorCode::InvalidArgument,
             ErrorStage::Validate,
             format!("invalid netmask format: '{value}'"),
@@ -141,7 +141,7 @@ fn validate_netmask(value: &str) -> Result<Ipv4Addr, DomainError> {
     let raw = u32::from(mask);
     let inverted = !raw;
     if (inverted.wrapping_add(1) & inverted) != 0 || raw == 0 {
-        return Err(DomainError::new(
+        return Err(LegacyAppError::new(
             ErrorCode::InvalidArgument,
             ErrorStage::Validate,
             format!("netmask '{value}' is not contiguous"),
@@ -151,10 +151,10 @@ fn validate_netmask(value: &str) -> Result<Ipv4Addr, DomainError> {
     Ok(mask)
 }
 
-fn validate_mac_address(mac: &str) -> Result<(), DomainError> {
+fn validate_mac_address(mac: &str) -> Result<(), LegacyAppError> {
     let parts: Vec<&str> = mac.split(':').collect();
     if parts.len() != 6 {
-        return Err(DomainError::new(
+        return Err(LegacyAppError::new(
             ErrorCode::InvalidArgument,
             ErrorStage::Validate,
             "MAC address must have 6 octets separated by colons",
@@ -163,7 +163,7 @@ fn validate_mac_address(mac: &str) -> Result<(), DomainError> {
 
     for part in parts {
         if part.len() != 2 || !part.chars().all(|c| c.is_ascii_hexdigit()) {
-            return Err(DomainError::new(
+            return Err(LegacyAppError::new(
                 ErrorCode::InvalidArgument,
                 ErrorStage::Validate,
                 format!("invalid MAC octet: '{part}'"),
@@ -172,7 +172,7 @@ fn validate_mac_address(mac: &str) -> Result<(), DomainError> {
     }
 
     if mac == "00:00:00:00:00:00" || mac.eq_ignore_ascii_case("ff:ff:ff:ff:ff:ff") {
-        return Err(DomainError::new(
+        return Err(LegacyAppError::new(
             ErrorCode::InvalidArgument,
             ErrorStage::Validate,
             "MAC address cannot be all zeros or broadcast",
@@ -182,14 +182,14 @@ fn validate_mac_address(mac: &str) -> Result<(), DomainError> {
     Ok(())
 }
 
-fn validate_mtu(mtu: u16, proto: WanProtocol) -> Result<(), DomainError> {
+fn validate_mtu(mtu: u16, proto: WanProtocol) -> Result<(), LegacyAppError> {
     let max = if proto == WanProtocol::Pppoe {
         1492
     } else {
         1500
     };
     if !(576..=max).contains(&mtu) {
-        return Err(DomainError::new(
+        return Err(LegacyAppError::new(
             ErrorCode::InvalidArgument,
             ErrorStage::Validate,
             format!("MTU must be between 576 and {max} for {proto:?}"),

@@ -4,7 +4,7 @@ use tracing::{error, info, warn};
 
 use crate::{
     application::app::App,
-    domain::errors::{DomainError, ErrorCode, ErrorStage},
+    domain::errors::{LegacyAppError, ErrorCode, ErrorStage},
     domain::{
         OperationSource, OperationStatus, PublicOperation, STATE_SCHEMA_VERSION,
         TransactionJournal, WanDesired, WanStatus,
@@ -24,7 +24,7 @@ pub struct WanChangeContext {
 
 impl WanChangeContext {
     #[must_use]
-    pub fn public(&self, status: OperationStatus, error: Option<DomainError>) -> PublicOperation {
+    pub fn public(&self, status: OperationStatus, error: Option<LegacyAppError>) -> PublicOperation {
         PublicOperation {
             id: self.operation_id.clone(),
             request_id: self.request_id.clone(),
@@ -72,7 +72,7 @@ pub fn run_wan_change(app: Arc<App>, context: WanChangeContext) {
     }
 }
 
-fn execute_wan(app: &Arc<App>, context: &WanChangeContext) -> Result<(), DomainError> {
+fn execute_wan(app: &Arc<App>, context: &WanChangeContext) -> Result<(), LegacyAppError> {
     let session = crate::infrastructure::backend::SessionGuard::new(app.backend.as_ref()).map_err(
         |error| error.with_operation(&context.operation_id, context.request_id.as_deref()),
     )?;
@@ -109,7 +109,7 @@ fn stage_and_apply_wan(
     app: &Arc<App>,
     context: &WanChangeContext,
     session_id: &str,
-) -> Result<(), DomainError> {
+) -> Result<(), LegacyAppError> {
     app.set_operation_status_with_kind(
         &context.operation_id,
         "wan.set_config",
@@ -128,7 +128,7 @@ fn stage_and_apply_wan(
         .apply(session_id, app.timing.rpcd_rollback_timeout_secs)
 }
 
-fn verify_wan_ready(app: &Arc<App>, context: &WanChangeContext) -> Result<(), DomainError> {
+fn verify_wan_ready(app: &Arc<App>, context: &WanChangeContext) -> Result<(), LegacyAppError> {
     app.set_operation_status_with_kind(
         &context.operation_id,
         "wan.set_config",
@@ -151,7 +151,7 @@ fn verify_wan_ready(app: &Arc<App>, context: &WanChangeContext) -> Result<(), Do
     }
 
     warn!("WAN verification timed out; rolling back");
-    Err(DomainError::new(
+    Err(LegacyAppError::new(
         ErrorCode::VerifyTimeout,
         ErrorStage::Verify,
         "WAN interface did not become ready",
@@ -162,7 +162,7 @@ fn persist_and_confirm_wan(
     app: &Arc<App>,
     context: &WanChangeContext,
     session_id: &str,
-) -> Result<(), DomainError> {
+) -> Result<(), LegacyAppError> {
     if context.source == OperationSource::User {
         app.set_operation_status_with_kind(
             &context.operation_id,
@@ -182,7 +182,7 @@ fn persist_and_confirm_wan(
     app.backend.confirm(session_id)
 }
 
-fn attach(error: DomainError, context: &WanChangeContext) -> DomainError {
+fn attach(error: LegacyAppError, context: &WanChangeContext) -> LegacyAppError {
     error.with_operation(&context.operation_id, context.request_id.as_deref())
 }
 
@@ -191,7 +191,7 @@ pub fn force_wan_state_sync(
     desired: &WanDesired,
     _source: OperationSource,
     _base_revision: u64,
-) -> Result<(), DomainError> {
+) -> Result<(), LegacyAppError> {
     let session = crate::infrastructure::backend::SessionGuard::new(app.backend.as_ref())?;
     if let Err(error) = app.backend.stage_wan_config(&session.id, desired) {
         let _ = app.backend.revert_staged(&session.id);

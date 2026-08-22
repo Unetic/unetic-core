@@ -2,7 +2,7 @@ use tracing::{info, warn};
 
 use super::App;
 use crate::{
-    domain::errors::{DomainError, ErrorCode, ErrorStage},
+    domain::errors::{LegacyAppError, ErrorCode, ErrorStage},
     domain::{OperationSource, OperationStatus, TransactionJournal, WifiNetworkConfig},
 };
 
@@ -10,7 +10,7 @@ impl App {
     pub(crate) fn recover_from_journal(
         &self,
         journal: &TransactionJournal,
-    ) -> Result<(), DomainError> {
+    ) -> Result<(), LegacyAppError> {
         let config = self
             .inner
             .lock()
@@ -37,7 +37,7 @@ impl App {
         Ok(())
     }
 
-    fn recover_old_desired_state(&self, journal: &TransactionJournal) -> Result<(), DomainError> {
+    fn recover_old_desired_state(&self, journal: &TransactionJournal) -> Result<(), LegacyAppError> {
         info!(
             operation_id = %journal.operation_id,
             "recovering interrupted transaction to old desired state"
@@ -54,7 +54,7 @@ impl App {
             &old_wifi,
             OperationSource::Recovery,
         )?;
-        let error = DomainError::new(
+        let error = LegacyAppError::new(
             ErrorCode::OperationInterrupted,
             ErrorStage::Bootstrap,
             "operation was interrupted by a core restart and rolled back",
@@ -71,7 +71,7 @@ impl App {
         Ok(())
     }
 
-    fn confirm_new_desired_state(&self, journal: &TransactionJournal) -> Result<(), DomainError> {
+    fn confirm_new_desired_state(&self, journal: &TransactionJournal) -> Result<(), LegacyAppError> {
         info!(
             operation_id = %journal.operation_id,
             "confirming committed desired state after restart"

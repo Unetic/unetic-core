@@ -2,7 +2,7 @@ use std::{sync::Arc, thread};
 
 use super::App;
 use crate::{
-    domain::errors::{DomainError, ErrorCode, ErrorStage},
+    domain::errors::{LegacyAppError, ErrorCode, ErrorStage},
     domain::{Lifecycle, MaintenanceState, PublicState},
 };
 
@@ -11,11 +11,11 @@ impl App {
         self.state().maintenance
     }
 
-    pub fn maintenance_enter(&self, reason: Option<String>) -> Result<PublicState, DomainError> {
+    pub fn maintenance_enter(&self, reason: Option<String>) -> Result<PublicState, LegacyAppError> {
         {
             let mut inner = self.inner.lock().expect("app state poisoned");
             if inner.active_operation.is_some() || inner.maintenance_exiting {
-                return Err(DomainError::new(
+                return Err(LegacyAppError::new(
                     ErrorCode::Busy,
                     ErrorStage::Validate,
                     "cannot enter maintenance while another transition is active",
@@ -31,14 +31,14 @@ impl App {
         Ok(self.publish())
     }
 
-    pub fn maintenance_exit(self: &Arc<Self>) -> Result<PublicState, DomainError> {
+    pub fn maintenance_exit(self: &Arc<Self>) -> Result<PublicState, LegacyAppError> {
         {
             let mut inner = self.inner.lock().expect("app state poisoned");
             if !inner.maintenance {
                 return Ok(self.state());
             }
             if inner.active_operation.is_some() || inner.maintenance_exiting {
-                return Err(DomainError::new(
+                return Err(LegacyAppError::new(
                     ErrorCode::Busy,
                     ErrorStage::Validate,
                     "maintenance exit is already running or blocked by another transition",
@@ -55,7 +55,7 @@ impl App {
         {
             let mut inner = self.inner.lock().expect("app state poisoned");
             inner.maintenance_exiting = false;
-            let domain_error = DomainError::new(
+            let domain_error = LegacyAppError::new(
                 ErrorCode::Internal,
                 ErrorStage::Reconcile,
                 format!("failed to start maintenance exit worker: {error}"),

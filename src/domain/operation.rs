@@ -38,7 +38,7 @@ pub struct PublicOperation {
     pub kind: String,
     pub status: OperationStatus,
     pub requested_ssid: String,
-    pub error: Option<crate::domain::errors::DomainError>,
+    pub error: Option<crate::domain::errors::LegacyAppError>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -50,7 +50,7 @@ pub struct LastOperation {
     pub status: OperationStatus,
     pub revision: u64,
     pub requested_ssid: String,
-    pub error: Option<crate::domain::errors::DomainError>,
+    pub error: Option<crate::domain::errors::LegacyAppError>,
     pub finished_at_ms: u64,
 }
 

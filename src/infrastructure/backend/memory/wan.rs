@@ -1,11 +1,11 @@
 use super::MemoryBackend;
 use crate::{
-    domain::errors::{DomainError, ErrorCode, ErrorStage},
+    domain::errors::{LegacyAppError, ErrorCode, ErrorStage},
     domain::{DiscoveredWan, WanDesired, WanPublicState},
 };
 
 impl MemoryBackend {
-    pub(crate) fn mem_discover_primary_wan(&self) -> Result<DiscoveredWan, DomainError> {
+    pub(crate) fn mem_discover_primary_wan(&self) -> Result<DiscoveredWan, LegacyAppError> {
         let state = self.state.lock().expect("memory backend poisoned");
         Ok(DiscoveredWan {
             present: state.wan_committed.present,
@@ -22,7 +22,7 @@ impl MemoryBackend {
     pub(crate) fn mem_read_wan_config(
         &self,
         session: Option<&str>,
-    ) -> Result<WanDesired, DomainError> {
+    ) -> Result<WanDesired, LegacyAppError> {
         let state = self.state.lock().expect("memory backend poisoned");
         if let Some(session) = session
             && let Some(staged) = state.wan_sessions.get(session)
@@ -36,10 +36,10 @@ impl MemoryBackend {
         &self,
         session: &str,
         config: &WanDesired,
-    ) -> Result<(), DomainError> {
+    ) -> Result<(), LegacyAppError> {
         let mut state = self.state.lock().expect("memory backend poisoned");
         if state.failure.fail_stage {
-            return Err(DomainError::new(
+            return Err(LegacyAppError::new(
                 ErrorCode::UciStageFailed,
                 ErrorStage::Stage,
                 "injected stage failure",
@@ -51,7 +51,7 @@ impl MemoryBackend {
         Ok(())
     }
 
-    pub(crate) fn mem_read_wan_runtime_status(&self) -> Result<WanPublicState, DomainError> {
+    pub(crate) fn mem_read_wan_runtime_status(&self) -> Result<WanPublicState, LegacyAppError> {
         let state = self.state.lock().expect("memory backend poisoned");
         Ok(state.wan_runtime.clone())
     }

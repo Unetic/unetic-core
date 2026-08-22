@@ -2,9 +2,9 @@ use std::{collections::BTreeMap, path::Path};
 
 use serde_json::json;
 
-use super::{devices, rpc, switch, wan, wireless};
+use super::{devices, rpc, wan, wireless};
 use crate::{
-    domain::errors::{DomainError, ErrorCode, ErrorStage},
+    domain::errors::{LegacyAppError, ErrorCode, ErrorStage},
     domain::{DiscoveredWan, DiscoveredWifi, WanDesired, WanPublicState, WifiNetworkConfig},
     infrastructure::backend::RouterBackend,
 };
@@ -12,21 +12,21 @@ use crate::{
 pub struct OpenWrtBackend;
 
 impl OpenWrtBackend {
-    pub fn new() -> Result<Self, DomainError> {
+    pub fn new() -> Result<Self, LegacyAppError> {
         Ok(Self)
     }
 }
 
 impl RouterBackend for OpenWrtBackend {
-    fn discover_primary_wifi(&self) -> Result<DiscoveredWifi, DomainError> {
+    fn discover_primary_wifi(&self) -> Result<DiscoveredWifi, LegacyAppError> {
         wireless::discover_primary_wifi()
     }
 
-    fn create_session(&self) -> Result<String, DomainError> {
+    fn create_session(&self) -> Result<String, LegacyAppError> {
         crate::infrastructure::openwrt::rpc::create_rpcd_session()
     }
 
-    fn destroy_session(&self, session: &str) -> Result<(), DomainError> {
+    fn destroy_session(&self, session: &str) -> Result<(), LegacyAppError> {
         crate::infrastructure::openwrt::rpc::destroy_rpcd_session(session)
     }
 
@@ -34,7 +34,7 @@ impl RouterBackend for OpenWrtBackend {
         &self,
         targets: &[String],
         session: Option<&str>,
-    ) -> Result<BTreeMap<String, WifiNetworkConfig>, DomainError> {
+    ) -> Result<BTreeMap<String, WifiNetworkConfig>, LegacyAppError> {
         wireless::read_wifi_configs(targets, session)
     }
 
@@ -43,11 +43,11 @@ impl RouterBackend for OpenWrtBackend {
         session: &str,
         targets: &[String],
         config: &WifiNetworkConfig,
-    ) -> Result<(), DomainError> {
+    ) -> Result<(), LegacyAppError> {
         wireless::stage_wifi_config(session, targets, config)
     }
 
-    fn discover_primary_wan(&self) -> Result<DiscoveredWan, DomainError> {
+    fn discover_primary_wan(&self) -> Result<DiscoveredWan, LegacyAppError> {
         match rpc::uci_get_config("network", Some("wan"), None, None) {
             Ok(res) => Ok(wan::parse_discovered_wan(&res)),
             Err(error) if error.code == ErrorCode::UciReadFailed => Ok(DiscoveredWan {
@@ -59,7 +59,7 @@ impl RouterBackend for OpenWrtBackend {
         }
     }
 
-    fn read_wan_config(&self, session: Option<&str>) -> Result<WanDesired, DomainError> {
+    fn read_wan_config(&self, session: Option<&str>) -> Result<WanDesired, LegacyAppError> {
         match rpc::uci_get_config("network", Some("wan"), None, session) {
             Ok(res) => Ok(wan::parse_discovered_wan(&res).to_desired()),
             Err(error) if error.code == ErrorCode::UciReadFailed => Ok(WanDesired::default()),
@@ -67,7 +67,7 @@ impl RouterBackend for OpenWrtBackend {
         }
     }
 
-    fn stage_wan_config(&self, session: &str, config: &WanDesired) -> Result<(), DomainError> {
+    fn stage_wan_config(&self, session: &str, config: &WanDesired) -> Result<(), LegacyAppError> {
         let values = crate::infrastructure::openwrt::wan::build_wan_staging_values(config);
         rpc::call_ubus(
             "uci",
@@ -81,12 +81,12 @@ impl RouterBackend for OpenWrtBackend {
         )
         .map(|_| ())
         .map_err(|error| {
-            DomainError::new(ErrorCode::UciStageFailed, ErrorStage::Stage, error.message)
+            LegacyAppError::new(ErrorCode::UciStageFailed, ErrorStage::Stage, error.message)
                 .retryable(error.retryable)
         })
     }
 
-    fn read_wan_runtime_status(&self) -> Result<WanPublicState, DomainError> {
+    fn read_wan_runtime_status(&self) -> Result<WanPublicState, LegacyAppError> {
         let response = match rpc::call_ubus("network.interface.wan", "status", json!({})) {
             Ok(res) => res,
             Err(_) => {
@@ -101,7 +101,7 @@ impl RouterBackend for OpenWrtBackend {
         Ok(wan::parse_wan_runtime_status(&response))
     }
 
-    fn revert_staged(&self, session: &str) -> Result<(), DomainError> {
+    fn revert_staged(&self, session: &str) -> Result<(), LegacyAppError> {
         let _ = rpc::call_ubus(
             "uci",
             "revert",
@@ -114,7 +114,7 @@ impl RouterBackend for OpenWrtBackend {
         )
         .map(|_| ())
         .map_err(|error| {
-            DomainError::new(
+            LegacyAppError::new(
                 ErrorCode::UciStageFailed,
                 ErrorStage::Rollback,
                 format!("failed to revert staged UCI changes: {}", error.message),
@@ -123,7 +123,7 @@ impl RouterBackend for OpenWrtBackend {
         })
     }
 
-    fn apply(&self, session: &str, rollback_timeout_secs: u32) -> Result<(), DomainError> {
+    fn apply(&self, session: &str, rollback_timeout_secs: u32) -> Result<(), LegacyAppError> {
         rpc::call_ubus(
             "uci",
             "apply",
@@ -135,7 +135,7 @@ impl RouterBackend for OpenWrtBackend {
         )
         .map(|_| ())
         .map_err(|error| {
-            DomainError::new(
+            LegacyAppError::new(
                 ErrorCode::UciApplyFailed,
                 ErrorStage::Apply,
                 format!("failed to apply staged UCI changes: {}", error.message),
@@ -144,11 +144,11 @@ impl RouterBackend for OpenWrtBackend {
         })
     }
 
-    fn confirm(&self, session: &str) -> Result<(), DomainError> {
+    fn confirm(&self, session: &str) -> Result<(), LegacyAppError> {
         rpc::call_ubus("uci", "confirm", json!({"ubus_rpc_session": session}))
             .map(|_| ())
             .map_err(|error| {
-                DomainError::new(
+                LegacyAppError::new(
                     ErrorCode::ConfirmFailed,
                     ErrorStage::Confirm,
                     format!("failed to confirm applied UCI changes: {}", error.message),
@@ -157,11 +157,11 @@ impl RouterBackend for OpenWrtBackend {
             })
     }
 
-    fn rollback(&self, session: &str) -> Result<(), DomainError> {
+    fn rollback(&self, session: &str) -> Result<(), LegacyAppError> {
         rpc::call_ubus("uci", "rollback", json!({"ubus_rpc_session": session}))
             .map(|_| ())
             .map_err(|error| {
-                DomainError::new(
+                LegacyAppError::new(
                     ErrorCode::RollbackFailed,
                     ErrorStage::Rollback,
                     format!("failed to roll back applied UCI changes: {}", error.message),
@@ -170,25 +170,24 @@ impl RouterBackend for OpenWrtBackend {
             })
     }
 
-    fn runtime_healthy(&self, targets: &[String], ssid: &str) -> Result<bool, DomainError> {
+    fn runtime_healthy(&self, targets: &[String], ssid: &str) -> Result<bool, LegacyAppError> {
         wireless::check_runtime_healthy(targets, ssid)
     }
 
-    fn reload_wireless_runtime(&self) -> Result<(), DomainError> {
+    fn reload_wireless_runtime(&self) -> Result<(), LegacyAppError> {
         wireless::reload_wireless()
     }
 
-    fn read_switch_info(&self) -> Result<crate::domain::switch::SwitchInfo, DomainError> {
-        let sys_root = Path::new("/sys");
-        let debug_root = Path::new("/sys/kernel/debug");
-        Ok(switch::read_switch_info(sys_root, debug_root))
+    fn ports_list(&self) -> Result<Vec<crate::domain::ports::PhysicalPort>, LegacyAppError> {
+        let devices = self.read_devices().unwrap_or_default();
+        Ok(super::ports::ports_list(&devices))
     }
 
-    fn read_system_info(&self) -> Result<crate::domain::system::SystemInfo, DomainError> {
+    fn read_system_info(&self) -> Result<crate::domain::system::SystemInfo, LegacyAppError> {
         Ok(super::system::read_system_info())
     }
 
-    fn read_devices(&self) -> Result<Vec<crate::domain::device::Device>, DomainError> {
+    fn read_devices(&self) -> Result<Vec<crate::domain::device::Device>, LegacyAppError> {
         devices::read_devices()
     }
 }

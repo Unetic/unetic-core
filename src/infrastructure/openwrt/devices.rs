@@ -5,7 +5,7 @@ use std::{
     process::Command,
 };
 
-use crate::{domain::device::Device, domain::errors::DomainError};
+use crate::{domain::device::Device, domain::errors::LegacyAppError};
 
 #[derive(Debug, Clone)]
 pub struct DhcpLease {
@@ -207,7 +207,7 @@ pub fn merge_devices(
     devices
 }
 
-pub fn read_devices() -> Result<Vec<Device>, DomainError> {
+pub fn read_devices() -> Result<Vec<Device>, LegacyAppError> {
     let dhcp_content = fs::read_to_string("/tmp/dhcp.leases").unwrap_or_default();
     let arp_content = fs::read_to_string("/proc/net/arp").unwrap_or_default();
     let dhcp_leases = parse_dhcp_leases(&dhcp_content);

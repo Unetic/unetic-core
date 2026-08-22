@@ -14,8 +14,7 @@ pub mod presentation;
 
 pub use application::{App, Timing};
 pub use domain::{
-    Device, SwitchArchitecture, SwitchFeatureStatus, SwitchFeatures, SwitchInfo, SwitchSocInfo,
-    SystemInfo,
+    Device, SystemInfo,
 };
 pub use infrastructure::{MemoryBackend, RouterBackend, StateStore, openwrt};
 pub use presentation::api;

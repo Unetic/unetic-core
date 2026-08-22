@@ -2,7 +2,7 @@ use std::{thread, time::Instant};
 
 use crate::{
     application::app::App,
-    domain::errors::{DomainError, ErrorCode, ErrorStage},
+    domain::errors::{LegacyAppError, ErrorCode, ErrorStage},
     domain::{OperationSource, WifiNetworkConfig},
 };
 
@@ -11,7 +11,7 @@ pub fn verify(
     targets: &[String],
     expected: &WifiNetworkConfig,
     timeout: std::time::Duration,
-) -> Result<(), DomainError> {
+) -> Result<(), LegacyAppError> {
     let deadline = Instant::now() + timeout;
     let mut successful_samples = 0_u8;
     let mut last_reason = String::from("wireless state not converged");
@@ -57,7 +57,7 @@ pub fn verify(
         thread::sleep(app.timing.verify_sample_delay);
     }
 
-    Err(DomainError::new(
+    Err(LegacyAppError::new(
         ErrorCode::VerifyTimeout,
         ErrorStage::Verify,
         format!("Wi-Fi configuration did not converge before timeout: {last_reason}"),
@@ -70,9 +70,9 @@ pub fn force_state_sync(
     targets: &[String],
     config: &WifiNetworkConfig,
     _source: OperationSource,
-) -> Result<(), DomainError> {
+) -> Result<(), LegacyAppError> {
     if targets.is_empty() {
-        return Err(DomainError::new(
+        return Err(LegacyAppError::new(
             ErrorCode::TargetMissing,
             ErrorStage::Reconcile,
             "cannot reconcile Wi-Fi without managed targets",
@@ -98,7 +98,7 @@ pub fn force_state_sync(
         })
     }) {
         let _ = app.backend.revert_staged(&session.id);
-        return Err(DomainError::new(
+        return Err(LegacyAppError::new(
             ErrorCode::UciStageMismatch,
             ErrorStage::Reconcile,
             "recovery stage did not match desired state",
@@ -121,7 +121,7 @@ pub fn force_state_sync(
     Ok(())
 }
 
-pub fn run_recovery_sync(app: &App, source: OperationSource) -> Result<(), DomainError> {
+pub fn run_recovery_sync(app: &App, source: OperationSource) -> Result<(), LegacyAppError> {
     let (targets, wifi) = {
         let inner = app.inner.lock().expect("app state poisoned");
         (

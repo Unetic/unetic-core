@@ -97,7 +97,7 @@ pub struct PublicState {
     pub wan: WanPublicState,
     pub active_operation: Option<PublicOperation>,
     pub last_user_operation: Option<LastOperation>,
-    pub last_system_error: Option<crate::domain::errors::DomainError>,
+    pub last_system_error: Option<crate::domain::errors::LegacyAppError>,
     pub drift: DriftState,
     pub health: HealthState,
 }

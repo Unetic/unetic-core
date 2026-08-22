@@ -4,19 +4,19 @@ use serde_json::{Value, json};
 
 use super::rpc::{call_ubus, uci_get_config};
 use crate::{
-    domain::errors::{DomainError, ErrorCode, ErrorStage},
+    domain::errors::{LegacyAppError, ErrorCode, ErrorStage},
     domain::{DiscoveredWifi, WifiNetworkConfig},
 };
 
 type WifiCandidate = (String, String, String, Option<String>);
 
-pub fn discover_primary_wifi() -> Result<DiscoveredWifi, DomainError> {
+pub fn discover_primary_wifi() -> Result<DiscoveredWifi, LegacyAppError> {
     let response = uci_get_config("wireless", None, None, None)?;
     let values = response
         .get("values")
         .and_then(Value::as_object)
         .ok_or_else(|| {
-            DomainError::new(
+            LegacyAppError::new(
                 ErrorCode::AmbiguousWifiConfig,
                 ErrorStage::Bootstrap,
                 "wireless UCI response has no values table",
@@ -29,7 +29,7 @@ pub fn discover_primary_wifi() -> Result<DiscoveredWifi, DomainError> {
         .collect();
 
     if candidates.is_empty() {
-        return Err(DomainError::new(
+        return Err(LegacyAppError::new(
             ErrorCode::AmbiguousWifiConfig,
             ErrorStage::Bootstrap,
             "no LAN AP wifi-iface sections found",
@@ -42,7 +42,7 @@ pub fn discover_primary_wifi() -> Result<DiscoveredWifi, DomainError> {
         .any(|(_, ssid, enc, key)| ssid != &first.1 || enc != &first.2 || key != &first.3);
 
     if differs {
-        return Err(DomainError::new(
+        return Err(LegacyAppError::new(
             ErrorCode::AmbiguousWifiConfig,
             ErrorStage::Bootstrap,
             "LAN AP wifi-iface sections use different wireless settings",
@@ -96,7 +96,7 @@ fn parse_lan_ap_candidate(name: &str, section: &Value) -> Option<WifiCandidate> 
 pub fn read_wifi_configs(
     targets: &[String],
     session: Option<&str>,
-) -> Result<BTreeMap<String, WifiNetworkConfig>, DomainError> {
+) -> Result<BTreeMap<String, WifiNetworkConfig>, LegacyAppError> {
     let mut result = BTreeMap::new();
     for target in targets {
         let config = read_target_wifi_config(target, session)?;
@@ -108,13 +108,13 @@ pub fn read_wifi_configs(
 fn read_target_wifi_config(
     target: &str,
     session: Option<&str>,
-) -> Result<WifiNetworkConfig, DomainError> {
+) -> Result<WifiNetworkConfig, LegacyAppError> {
     let response = uci_get_config("wireless", Some(target), None, session)?;
     let values = response
         .get("values")
         .and_then(Value::as_object)
         .ok_or_else(|| {
-            DomainError::new(
+            LegacyAppError::new(
                 ErrorCode::TargetMissing,
                 ErrorStage::Verify,
                 format!("target {target} has no UCI values table"),
@@ -125,7 +125,7 @@ fn read_target_wifi_config(
         .get("ssid")
         .and_then(Value::as_str)
         .ok_or_else(|| {
-            DomainError::new(
+            LegacyAppError::new(
                 ErrorCode::TargetMissing,
                 ErrorStage::Verify,
                 format!("target {target} has no SSID option"),
@@ -152,7 +152,7 @@ pub fn stage_wifi_config(
     session: &str,
     targets: &[String],
     config: &WifiNetworkConfig,
-) -> Result<(), DomainError> {
+) -> Result<(), LegacyAppError> {
     for target in targets {
         let mut values = serde_json::Map::new();
         values.insert("ssid".into(), json!(config.ssid));
@@ -175,7 +175,7 @@ pub fn stage_wifi_config(
         )
         .map(|_| ())
         .map_err(|error| {
-            DomainError::new(ErrorCode::UciStageFailed, ErrorStage::Stage, error.message)
+            LegacyAppError::new(ErrorCode::UciStageFailed, ErrorStage::Stage, error.message)
                 .retryable(error.retryable)
         })?;
 
@@ -195,7 +195,7 @@ pub fn stage_wifi_config(
     Ok(())
 }
 
-pub fn check_runtime_healthy(targets: &[String], ssid: &str) -> Result<bool, DomainError> {
+pub fn check_runtime_healthy(targets: &[String], ssid: &str) -> Result<bool, LegacyAppError> {
     let status = call_ubus("network.wireless", "status", json!({}))?;
     let Some(radios) = status.as_object() else {
         return Ok(false);
@@ -216,12 +216,12 @@ pub fn check_runtime_healthy(targets: &[String], ssid: &str) -> Result<bool, Dom
     Ok(true)
 }
 
-pub fn reload_wireless() -> Result<(), DomainError> {
+pub fn reload_wireless() -> Result<(), LegacyAppError> {
     call_ubus("network.wireless", "down", json!({}))
         .and_then(|_| call_ubus("network.wireless", "up", json!({})))
         .map(|_| ())
         .map_err(|error| {
-            DomainError::new(
+            LegacyAppError::new(
                 ErrorCode::ReconcileFailed,
                 ErrorStage::Reconcile,
                 format!("wireless runtime reload failed: {}", error.message),

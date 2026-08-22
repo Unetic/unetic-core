@@ -2,11 +2,11 @@ use std::path::Path;
 
 use serde_json::{Map, Value, json};
 
-use crate::domain::errors::{DomainError, ErrorCode, ErrorStage};
+use crate::domain::errors::{LegacyAppError, ErrorCode, ErrorStage};
 
-pub fn call_ubus(object: &str, method: &str, request: Value) -> Result<Value, DomainError> {
+pub fn call_ubus(object: &str, method: &str, request: Value) -> Result<Value, LegacyAppError> {
     let payload = serde_json::to_string(&request).map_err(|error| {
-        DomainError::new(
+        LegacyAppError::new(
             ErrorCode::Internal,
             ErrorStage::Transport,
             format!("failed to encode ubus request: {error}"),
@@ -15,7 +15,7 @@ pub fn call_ubus(object: &str, method: &str, request: Value) -> Result<Value, Do
 
     let socket = Path::new("/var/run/ubus/ubus.sock");
     let mut connection = ubus::Connection::connect(socket).map_err(|error| {
-        DomainError::new(
+        LegacyAppError::new(
             ErrorCode::UbusUnavailable,
             ErrorStage::Transport,
             format!("failed to connect to ubus: {error}"),
@@ -29,7 +29,7 @@ pub fn call_ubus(object: &str, method: &str, request: Value) -> Result<Value, Do
         } else {
             ErrorCode::UbusUnavailable
         };
-        DomainError::new(
+        LegacyAppError::new(
             code,
             ErrorStage::Transport,
             format!("ubus {object}.{method} failed: {error}"),
@@ -38,7 +38,7 @@ pub fn call_ubus(object: &str, method: &str, request: Value) -> Result<Value, Do
     })?;
 
     serde_json::from_str(&response).map_err(|error| {
-        DomainError::new(
+        LegacyAppError::new(
             ErrorCode::UbusUnavailable,
             ErrorStage::Transport,
             format!("invalid JSON reply from {object}.{method}: {error}"),
@@ -46,13 +46,13 @@ pub fn call_ubus(object: &str, method: &str, request: Value) -> Result<Value, Do
     })
 }
 
-pub fn create_rpcd_session() -> Result<String, DomainError> {
+pub fn create_rpcd_session() -> Result<String, LegacyAppError> {
     let response = call_ubus("session", "create", json!({"timeout": 300}))?;
     let sid = response
         .get("ubus_rpc_session")
         .and_then(Value::as_str)
         .ok_or_else(|| {
-            DomainError::new(
+            LegacyAppError::new(
                 ErrorCode::RpcdSessionLost,
                 ErrorStage::Transport,
                 "rpcd session.create did not return ubus_rpc_session",
@@ -77,7 +77,7 @@ pub fn create_rpcd_session() -> Result<String, DomainError> {
     Ok(sid)
 }
 
-pub fn destroy_rpcd_session(session: &str) -> Result<(), DomainError> {
+pub fn destroy_rpcd_session(session: &str) -> Result<(), LegacyAppError> {
     call_ubus(
         "session",
         "destroy",
@@ -93,7 +93,7 @@ pub fn uci_get_config(
     section: Option<&str>,
     option: Option<&str>,
     session: Option<&str>,
-) -> Result<Value, DomainError> {
+) -> Result<Value, LegacyAppError> {
     let mut request = Map::new();
     request.insert("config".into(), Value::String(config.into()));
     if let Some(section) = section {
@@ -106,7 +106,7 @@ pub fn uci_get_config(
         request.insert("ubus_rpc_session".into(), Value::String(session.to_owned()));
     }
     call_ubus("uci", "get", Value::Object(request)).map_err(|error| {
-        DomainError::new(ErrorCode::UciReadFailed, ErrorStage::Verify, error.message)
+        LegacyAppError::new(ErrorCode::UciReadFailed, ErrorStage::Verify, error.message)
             .retryable(error.retryable)
     })
 }

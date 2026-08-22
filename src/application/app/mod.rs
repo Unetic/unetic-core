@@ -12,8 +12,8 @@ use serde_json::json;
 use tracing::{error, warn};
 
 use crate::{
-    domain::errors::{DomainError, ErrorCode, ErrorStage},
-    domain::switch::SwitchInfo,
+    domain::errors::{LegacyAppError, ErrorCode, ErrorStage},
+
     domain::{
         DesiredConfig, HealthState, LastOperation, Lifecycle, PublicOperation, PublicState,
         WifiPublicState,
@@ -22,15 +22,14 @@ use crate::{
     infrastructure::storage::StateStore,
 };
 
-mod handlers;
+pub mod handlers;
 mod maintenance;
 mod operations;
 mod reconcile;
 mod recovery;
-mod state;
 mod wan;
 
-use self::state::{generate_id, snapshot};
+use crate::application::state::{generate_id, snapshot};
 
 #[derive(Debug, Clone, Copy)]
 pub struct Timing {
@@ -64,7 +63,7 @@ pub(crate) struct Inner {
     pub wan: crate::domain::WanPublicState,
     pub active_operation: Option<PublicOperation>,
     pub last_user_operation: Option<LastOperation>,
-    pub last_system_error: Option<DomainError>,
+    pub last_system_error: Option<LegacyAppError>,
     pub event_seq: u64,
     pub boot_id: String,
     pub health: HealthState,
@@ -79,6 +78,7 @@ pub struct App {
     pub(crate) shutdown: AtomicBool,
     pub(crate) op_counter: AtomicUsize,
     pub(crate) timing: Timing,
+    pub subscriptions: crate::application::subscription::SubscriptionManager,
 }
 
 impl App {
@@ -139,6 +139,7 @@ impl App {
             shutdown: AtomicBool::new(false),
             op_counter: AtomicUsize::new(1),
             timing,
+            subscriptions: crate::application::subscription::SubscriptionManager::new(),
         });
 
         app.init();
@@ -188,30 +189,32 @@ impl App {
         self.state().health
     }
 
-    pub fn switch_get(&self) -> SwitchInfo {
-        self.backend
-            .read_switch_info()
-            .unwrap_or_else(|_| SwitchInfo::generic_software())
+    pub fn ports_list(&self) -> Result<Vec<crate::domain::ports::PhysicalPort>, LegacyAppError> {
+        self.backend.ports_list()
     }
 
     pub fn system_info(&self) -> crate::domain::system::SystemInfo {
         self.backend.read_system_info().unwrap_or_default()
     }
 
-    pub fn devices_list(&self) -> Result<Vec<crate::domain::device::Device>, DomainError> {
+    pub fn devices_list(&self) -> Result<Vec<crate::domain::device::Device>, LegacyAppError> {
         self.backend.read_devices()
+    }
+
+    pub fn has_active_subscribers(&self) -> bool {
+        self.subscriptions.has_active_subscribers()
     }
 }
 
 fn load_initial_config(
     backend: &dyn RouterBackend,
     store: &StateStore,
-) -> (DesiredConfig, Lifecycle, Option<DomainError>) {
+) -> (DesiredConfig, Lifecycle, Option<LegacyAppError>) {
     match store.load_config() {
         Ok(Some(config)) if config.schema_version == 1 => (config, Lifecycle::Booting, None),
         Ok(Some(_)) => {
             warn!("unsupported desired-state schema");
-            let error = DomainError::new(
+            let error = LegacyAppError::new(
                 ErrorCode::StateCorrupt,
                 ErrorStage::Bootstrap,
                 "unsupported desired-state schema",
@@ -229,7 +232,7 @@ fn load_initial_config(
 fn discover_default_config(
     backend: &dyn RouterBackend,
     store: &StateStore,
-) -> (DesiredConfig, Lifecycle, Option<DomainError>) {
+) -> (DesiredConfig, Lifecycle, Option<LegacyAppError>) {
     match backend.discover_primary_wifi() {
         Ok(discovered) => {
             let wan = backend

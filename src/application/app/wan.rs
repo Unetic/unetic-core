@@ -5,7 +5,7 @@ use serde_json::json;
 use super::{App, Inner};
 use crate::{
     application::wan::WanChangeContext,
-    domain::errors::{DomainError, ErrorCode, ErrorStage},
+    domain::errors::{LegacyAppError, ErrorCode, ErrorStage},
     domain::{Lifecycle, OperationAccepted, OperationSource, OperationStatus, SetWanRequest},
 };
 
@@ -13,7 +13,7 @@ impl App {
     pub fn set_wan(
         self: &Arc<Self>,
         request: SetWanRequest,
-    ) -> Result<OperationAccepted, DomainError> {
+    ) -> Result<OperationAccepted, LegacyAppError> {
         validate_wan_request(&request)?;
 
         let (context, noop_result) = {
@@ -51,7 +51,7 @@ impl App {
     fn persist_and_spawn_wan_change(
         self: &Arc<Self>,
         context: WanChangeContext,
-    ) -> Result<OperationAccepted, DomainError> {
+    ) -> Result<OperationAccepted, LegacyAppError> {
         let journal = context.to_journal(OperationStatus::Accepted);
         if let Err(error) = self.store.persist_transaction(&journal) {
             let mut inner = self.inner.lock().expect("app state poisoned");
@@ -69,7 +69,7 @@ impl App {
             .name(thread_name)
             .spawn(move || crate::application::wan::run_wan_change(app, worker_context))
         {
-            let error = DomainError::new(
+            let error = LegacyAppError::new(
                 ErrorCode::Internal,
                 ErrorStage::Internal,
                 format!("failed to start transaction worker: {spawn_error}"),
@@ -87,9 +87,9 @@ impl App {
     }
 }
 
-fn validate_wan_request(request: &SetWanRequest) -> Result<(), DomainError> {
+fn validate_wan_request(request: &SetWanRequest) -> Result<(), LegacyAppError> {
     if request.request_id.trim().is_empty() || request.request_id.len() > 128 {
-        return Err(DomainError::new(
+        return Err(LegacyAppError::new(
             ErrorCode::InvalidArgument,
             ErrorStage::Validate,
             "request_id must be between 1 and 128 bytes",
@@ -98,16 +98,16 @@ fn validate_wan_request(request: &SetWanRequest) -> Result<(), DomainError> {
     crate::application::wan::validate_wan_desired(&request.wan)
 }
 
-fn check_wan_app_ready(inner: &Inner) -> Result<(), DomainError> {
+fn check_wan_app_ready(inner: &Inner) -> Result<(), LegacyAppError> {
     if inner.maintenance {
-        return Err(DomainError::new(
+        return Err(LegacyAppError::new(
             ErrorCode::MaintenanceMode,
             ErrorStage::Validate,
             "Unetic is in maintenance mode",
         ));
     }
     if inner.lifecycle != Lifecycle::Ready {
-        return Err(DomainError::new(
+        return Err(LegacyAppError::new(
             ErrorCode::NotReady,
             ErrorStage::Validate,
             format!("core is not ready: {:?}", inner.lifecycle),
@@ -119,7 +119,7 @@ fn check_wan_app_ready(inner: &Inner) -> Result<(), DomainError> {
 fn check_wan_idempotency(
     inner: &Inner,
     request_id: &str,
-) -> Result<Option<OperationAccepted>, DomainError> {
+) -> Result<Option<OperationAccepted>, LegacyAppError> {
     if let Some(active) = &inner.active_operation {
         if active.request_id.as_deref() == Some(request_id) {
             return Ok(Some(OperationAccepted {
@@ -128,7 +128,7 @@ fn check_wan_idempotency(
                 noop: false,
             }));
         }
-        return Err(DomainError::new(
+        return Err(LegacyAppError::new(
             ErrorCode::Busy,
             ErrorStage::Validate,
             "another configuration operation is active",
@@ -148,9 +148,9 @@ fn check_wan_idempotency(
     Ok(None)
 }
 
-fn check_wan_revision(current_revision: u64, expected_revision: u64) -> Result<(), DomainError> {
+fn check_wan_revision(current_revision: u64, expected_revision: u64) -> Result<(), LegacyAppError> {
     if expected_revision != current_revision {
-        return Err(DomainError::new(
+        return Err(LegacyAppError::new(
             ErrorCode::RevisionConflict,
             ErrorStage::Validate,
             "configuration changed since this client last synchronized",

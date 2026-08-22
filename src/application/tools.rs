@@ -2,10 +2,16 @@ use std::process::Command;
 
 use serde::{Deserialize, Serialize};
 
-use crate::{
-    application::app::App,
-    domain::errors::{DomainError, ErrorCode, ErrorStage},
-};
+use crate::application::app::App;
+
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub enum PingError {
+    Success = 0,
+    InvalidArgument = 1,
+    CommandFailed = 2,
+}
+
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PingRequest {
@@ -17,26 +23,16 @@ pub struct PingResult {
     pub output: String,
 }
 
-pub fn execute_ping(host: &str) -> Result<PingResult, DomainError> {
+pub fn execute_ping(host: &str) -> Result<PingResult, PingError> {
     let host = host.trim();
     if host.is_empty() {
-        return Err(DomainError::new(
-            ErrorCode::InvalidArgument,
-            ErrorStage::Validate,
-            "host must not be empty",
-        ));
+        return Err(PingError::InvalidArgument);
     }
 
     let output = Command::new("ping")
         .args(["-c", "4", host])
         .output()
-        .map_err(|error| {
-            DomainError::new(
-                ErrorCode::Internal,
-                ErrorStage::Transport,
-                format!("failed to execute ping command: {error}"),
-            )
-        })?;
+        .map_err(|_| PingError::CommandFailed)?;
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -52,7 +48,7 @@ pub fn execute_ping(host: &str) -> Result<PingResult, DomainError> {
 }
 
 impl App {
-    pub fn ping(&self, host: &str) -> Result<PingResult, DomainError> {
+    pub fn ping(&self, host: &str) -> Result<PingResult, PingError> {
         execute_ping(host)
     }
 }
@@ -77,7 +73,7 @@ mod tests {
     #[test]
     fn test_execute_ping_empty_host() {
         let err = execute_ping("   ").expect_err("empty host must fail");
-        assert_eq!(err.code, ErrorCode::InvalidArgument);
+        assert_eq!(err, PingError::InvalidArgument);
     }
 
     #[test]
@@ -88,9 +84,9 @@ mod tests {
         let app = App::bootstrap(backend, store, tx);
 
         let response_str =
-            crate::presentation::api::dispatch(&app, "tools.ping", r#"{"host":"127.0.0.1"}"#);
+            crate::presentation::api::dispatch(&app, "tools.ping", r#"{"idempotence_token":"xyz","host":"127.0.0.1"}"#);
         let val: serde_json::Value = serde_json::from_str(&response_str).expect("valid json");
-        assert_eq!(val.get("ok").and_then(|v| v.as_bool()), Some(true));
+        assert_eq!(val.get("error").and_then(|v| v.as_u64()), Some(0));
         assert!(val.pointer("/result/output").is_some());
     }
 
@@ -101,12 +97,8 @@ mod tests {
         let store = StateStore::new(std::env::temp_dir().join("unetic-test-ping-invalid"));
         let app = App::bootstrap(backend, store, tx);
 
-        let response_str = crate::presentation::api::dispatch(&app, "tools.ping", r#"{"host":""}"#);
+        let response_str = crate::presentation::api::dispatch(&app, "tools.ping", r#"{"idempotence_token":"xyz","host":""}"#);
         let val: serde_json::Value = serde_json::from_str(&response_str).expect("valid json");
-        assert_eq!(val.get("ok").and_then(|v| v.as_bool()), Some(false));
-        assert_eq!(
-            val.pointer("/error/code").and_then(|v| v.as_str()),
-            Some("INVALID_ARGUMENT")
-        );
+        assert_eq!(val.get("error").and_then(|v| v.as_u64()), Some(1));
     }
 }

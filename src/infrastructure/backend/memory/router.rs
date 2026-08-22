@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use super::MemoryBackend;
 use crate::{
-    domain::errors::{DomainError, ErrorCode, ErrorStage},
+    domain::errors::{LegacyAppError, ErrorCode, ErrorStage},
     domain::{
         DiscoveredWan, DiscoveredWifi, WanDesired, WanProtocol, WanPublicState, WanStatus,
         WifiNetworkConfig,
@@ -11,11 +11,11 @@ use crate::{
 };
 
 impl RouterBackend for MemoryBackend {
-    fn discover_primary_wifi(&self) -> Result<DiscoveredWifi, DomainError> {
+    fn discover_primary_wifi(&self) -> Result<DiscoveredWifi, LegacyAppError> {
         let state = self.state.lock().expect("memory backend poisoned");
         let mut configs = state.committed.values();
         let Some(first) = configs.next() else {
-            return Err(DomainError::new(
+            return Err(LegacyAppError::new(
                 ErrorCode::AmbiguousWifiConfig,
                 ErrorStage::Bootstrap,
                 "no AP targets found",
@@ -24,7 +24,7 @@ impl RouterBackend for MemoryBackend {
         if configs
             .any(|c| c.ssid != first.ssid || c.encryption != first.encryption || c.key != first.key)
         {
-            return Err(DomainError::new(
+            return Err(LegacyAppError::new(
                 ErrorCode::AmbiguousWifiConfig,
                 ErrorStage::Bootstrap,
                 "managed APs do not share one Wi-Fi configuration",
@@ -38,11 +38,11 @@ impl RouterBackend for MemoryBackend {
         })
     }
 
-    fn discover_primary_wan(&self) -> Result<DiscoveredWan, DomainError> {
+    fn discover_primary_wan(&self) -> Result<DiscoveredWan, LegacyAppError> {
         self.mem_discover_primary_wan()
     }
 
-    fn create_session(&self) -> Result<String, DomainError> {
+    fn create_session(&self) -> Result<String, LegacyAppError> {
         let mut state = self.state.lock().expect("memory backend poisoned");
         let sid = format!("memory-session-{}", state.next_session);
         state.next_session += 1;
@@ -53,7 +53,7 @@ impl RouterBackend for MemoryBackend {
         Ok(sid)
     }
 
-    fn destroy_session(&self, session: &str) -> Result<(), DomainError> {
+    fn destroy_session(&self, session: &str) -> Result<(), LegacyAppError> {
         let mut state = self.state.lock().expect("memory backend poisoned");
         state.sessions.remove(session);
         state.wan_sessions.remove(session);
@@ -66,7 +66,7 @@ impl RouterBackend for MemoryBackend {
         &self,
         targets: &[String],
         session: Option<&str>,
-    ) -> Result<BTreeMap<String, WifiNetworkConfig>, DomainError> {
+    ) -> Result<BTreeMap<String, WifiNetworkConfig>, LegacyAppError> {
         let state = self.state.lock().expect("memory backend poisoned");
         let source = session
             .and_then(|sid| state.sessions.get(sid))
@@ -76,7 +76,7 @@ impl RouterBackend for MemoryBackend {
             .map(|target| {
                 source.get(target).cloned().map_or_else(
                     || {
-                        Err(DomainError::new(
+                        Err(LegacyAppError::new(
                             ErrorCode::TargetMissing,
                             ErrorStage::Verify,
                             format!("missing target {target}"),
@@ -93,17 +93,17 @@ impl RouterBackend for MemoryBackend {
         session: &str,
         targets: &[String],
         config: &WifiNetworkConfig,
-    ) -> Result<(), DomainError> {
+    ) -> Result<(), LegacyAppError> {
         let mut state = self.state.lock().expect("memory backend poisoned");
         if state.failure.fail_stage {
-            return Err(DomainError::new(
+            return Err(LegacyAppError::new(
                 ErrorCode::UciStageFailed,
                 ErrorStage::Stage,
                 "injected stage failure",
             ));
         }
         let staged = state.sessions.get_mut(session).ok_or_else(|| {
-            DomainError::new(
+            LegacyAppError::new(
                 ErrorCode::RpcdSessionLost,
                 ErrorStage::Stage,
                 "session not found",
@@ -111,7 +111,7 @@ impl RouterBackend for MemoryBackend {
         })?;
         for target in targets {
             if !staged.contains_key(target) {
-                return Err(DomainError::new(
+                return Err(LegacyAppError::new(
                     ErrorCode::TargetMissing,
                     ErrorStage::Stage,
                     format!("missing target {target}"),
@@ -124,19 +124,19 @@ impl RouterBackend for MemoryBackend {
         Ok(())
     }
 
-    fn read_wan_config(&self, session: Option<&str>) -> Result<WanDesired, DomainError> {
+    fn read_wan_config(&self, session: Option<&str>) -> Result<WanDesired, LegacyAppError> {
         self.mem_read_wan_config(session)
     }
 
-    fn stage_wan_config(&self, session: &str, config: &WanDesired) -> Result<(), DomainError> {
+    fn stage_wan_config(&self, session: &str, config: &WanDesired) -> Result<(), LegacyAppError> {
         self.mem_stage_wan_config(session, config)
     }
 
-    fn read_wan_runtime_status(&self) -> Result<WanPublicState, DomainError> {
+    fn read_wan_runtime_status(&self) -> Result<WanPublicState, LegacyAppError> {
         self.mem_read_wan_runtime_status()
     }
 
-    fn revert_staged(&self, session: &str) -> Result<(), DomainError> {
+    fn revert_staged(&self, session: &str) -> Result<(), LegacyAppError> {
         let mut state = self.state.lock().expect("memory backend poisoned");
         let committed = state.committed.clone();
         state.sessions.insert(session.to_owned(), committed);
@@ -145,17 +145,17 @@ impl RouterBackend for MemoryBackend {
         Ok(())
     }
 
-    fn apply(&self, session: &str, _rollback_timeout_secs: u32) -> Result<(), DomainError> {
+    fn apply(&self, session: &str, _rollback_timeout_secs: u32) -> Result<(), LegacyAppError> {
         let mut state = self.state.lock().expect("memory backend poisoned");
         if state.failure.fail_apply {
-            return Err(DomainError::new(
+            return Err(LegacyAppError::new(
                 ErrorCode::UciApplyFailed,
                 ErrorStage::Apply,
                 "injected apply failure",
             ));
         }
         let staged = state.sessions.get(session).cloned().ok_or_else(|| {
-            DomainError::new(
+            LegacyAppError::new(
                 ErrorCode::RpcdSessionLost,
                 ErrorStage::Apply,
                 "session not found",
@@ -189,10 +189,10 @@ impl RouterBackend for MemoryBackend {
         Ok(())
     }
 
-    fn confirm(&self, session: &str) -> Result<(), DomainError> {
+    fn confirm(&self, session: &str) -> Result<(), LegacyAppError> {
         let mut state = self.state.lock().expect("memory backend poisoned");
         if state.failure.fail_confirm {
-            return Err(DomainError::new(
+            return Err(LegacyAppError::new(
                 ErrorCode::ConfirmFailed,
                 ErrorStage::Confirm,
                 "injected confirm failure",
@@ -203,10 +203,10 @@ impl RouterBackend for MemoryBackend {
         Ok(())
     }
 
-    fn rollback(&self, session: &str) -> Result<(), DomainError> {
+    fn rollback(&self, session: &str) -> Result<(), LegacyAppError> {
         let mut state = self.state.lock().expect("memory backend poisoned");
         if state.failure.fail_rollback {
-            return Err(DomainError::new(
+            return Err(LegacyAppError::new(
                 ErrorCode::RollbackFailed,
                 ErrorStage::Rollback,
                 "injected rollback failure",
@@ -232,7 +232,7 @@ impl RouterBackend for MemoryBackend {
         Ok(())
     }
 
-    fn runtime_healthy(&self, _targets: &[String], _ssid: &str) -> Result<bool, DomainError> {
+    fn runtime_healthy(&self, _targets: &[String], _ssid: &str) -> Result<bool, LegacyAppError> {
         let state = self.state.lock().expect("memory backend poisoned");
         if state.failure.runtime_unhealthy {
             return Ok(false);
@@ -243,7 +243,7 @@ impl RouterBackend for MemoryBackend {
         Ok(true)
     }
 
-    fn reload_wireless_runtime(&self) -> Result<(), DomainError> {
+    fn reload_wireless_runtime(&self) -> Result<(), LegacyAppError> {
         self.state
             .lock()
             .expect("memory backend poisoned")
@@ -252,15 +252,15 @@ impl RouterBackend for MemoryBackend {
         Ok(())
     }
 
-    fn read_switch_info(&self) -> Result<crate::domain::switch::SwitchInfo, DomainError> {
-        Ok(super::mock::mock_switch_info())
+    fn ports_list(&self) -> Result<Vec<crate::domain::ports::PhysicalPort>, LegacyAppError> {
+        Ok(super::mock::mock_ports_info())
     }
 
-    fn read_system_info(&self) -> Result<crate::domain::system::SystemInfo, DomainError> {
+    fn read_system_info(&self) -> Result<crate::domain::system::SystemInfo, LegacyAppError> {
         Ok(super::mock::mock_system_info())
     }
 
-    fn read_devices(&self) -> Result<Vec<crate::domain::device::Device>, DomainError> {
+    fn read_devices(&self) -> Result<Vec<crate::domain::device::Device>, LegacyAppError> {
         Ok(super::mock::mock_devices())
     }
 }

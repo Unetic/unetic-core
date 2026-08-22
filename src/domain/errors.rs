@@ -50,7 +50,7 @@ pub enum ErrorStage {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct DomainError {
+pub struct LegacyAppError {
     pub code: ErrorCode,
     pub message: String,
     pub stage: ErrorStage,
@@ -60,7 +60,7 @@ pub struct DomainError {
     pub details: Value,
 }
 
-impl DomainError {
+impl LegacyAppError {
     #[must_use]
     pub fn new(code: ErrorCode, stage: ErrorStage, message: impl Into<String>) -> Self {
         Self {
@@ -99,10 +99,10 @@ impl DomainError {
     }
 }
 
-impl fmt::Display for DomainError {
+impl fmt::Display for LegacyAppError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{:?}: {}", self.code, self.message)
     }
 }
 
-impl std::error::Error for DomainError {}
+impl std::error::Error for LegacyAppError {}

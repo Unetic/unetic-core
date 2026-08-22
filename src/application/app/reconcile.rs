@@ -6,11 +6,12 @@ use std::{
 
 use tracing::warn;
 
-use super::{App, Inner, state::all_equal_config};
+use super::{App, Inner};
+use crate::application::state::all_equal_config;
 use crate::{
     application::transaction::ChangeContext,
     application::wan::WanChangeContext,
-    domain::errors::{DomainError, ErrorCode, ErrorStage},
+    domain::errors::{LegacyAppError, ErrorCode, ErrorStage},
     domain::{Lifecycle, OperationSource, OperationStatus},
 };
 
@@ -105,7 +106,7 @@ impl App {
         let mut inner = self.inner.lock().expect("app state poisoned");
         inner.active_operation = None;
         inner.repair_failures = inner.repair_failures.saturating_add(1);
-        let error = DomainError::new(ErrorCode::ReconcileFailed, ErrorStage::Reconcile, message)
+        let error = LegacyAppError::new(ErrorCode::ReconcileFailed, ErrorStage::Reconcile, message)
             .retryable(true);
         inner.last_system_error = Some(error);
         if inner.repair_failures >= 3 {
@@ -145,7 +146,7 @@ impl App {
         self.publish();
     }
 
-    fn repair_runtime(&self, targets: &[String], ssid: &str) -> Result<(), DomainError> {
+    fn repair_runtime(&self, targets: &[String], ssid: &str) -> Result<(), LegacyAppError> {
         self.backend.reload_wireless_runtime()?;
         let deadline = Instant::now() + self.timing.rollback_verify_timeout;
         let mut successful_samples = 0_u8;
@@ -162,7 +163,7 @@ impl App {
             }
             thread::sleep(self.timing.verify_sample_delay);
         }
-        Err(DomainError::new(
+        Err(LegacyAppError::new(
             ErrorCode::ReconcileFailed,
             ErrorStage::Reconcile,
             "wireless runtime did not recover after reload",

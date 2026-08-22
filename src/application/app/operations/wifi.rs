@@ -1,9 +1,10 @@
 use tracing::error;
 
 use crate::{
-    application::app::{App, Inner, state::now_ms},
+    application::app::{App, Inner},
+    application::state::now_ms,
     application::transaction::ChangeContext,
-    domain::errors::{DomainError, ErrorCode, ErrorStage},
+    domain::errors::{LegacyAppError, ErrorCode, ErrorStage},
     domain::{LastOperation, Lifecycle, OperationSource, OperationStatus},
 };
 
@@ -12,8 +13,8 @@ impl App {
         &self,
         context: &ChangeContext,
         status: OperationStatus,
-        error: Option<DomainError>,
-    ) -> Result<(), DomainError> {
+        error: Option<LegacyAppError>,
+    ) -> Result<(), LegacyAppError> {
         self.set_operation_status_with_kind(&context.operation_id, "wifi.set_config", status, error)
     }
 
@@ -22,8 +23,8 @@ impl App {
         operation_id: &str,
         _kind: &str,
         status: OperationStatus,
-        error: Option<DomainError>,
-    ) -> Result<(), DomainError> {
+        error: Option<LegacyAppError>,
+    ) -> Result<(), LegacyAppError> {
         {
             let mut inner = self.inner.lock().expect("app state poisoned");
             if let Some(active) = &mut inner.active_operation
@@ -37,7 +38,7 @@ impl App {
         Ok(())
     }
 
-    pub(crate) fn persist_new_desired(&self, context: &ChangeContext) -> Result<(), DomainError> {
+    pub(crate) fn persist_new_desired(&self, context: &ChangeContext) -> Result<(), LegacyAppError> {
         let mut config = {
             let inner = self.inner.lock().expect("app state poisoned");
             inner.config.clone()
@@ -52,7 +53,7 @@ impl App {
         Ok(())
     }
 
-    pub(crate) fn complete_success(&self, context: &ChangeContext) -> Result<(), DomainError> {
+    pub(crate) fn complete_success(&self, context: &ChangeContext) -> Result<(), LegacyAppError> {
         let revision = self
             .inner
             .lock()
@@ -80,7 +81,7 @@ impl App {
     pub(crate) fn complete_failure(
         &self,
         context: &ChangeContext,
-        error: DomainError,
+        error: LegacyAppError,
         rollback_failed: bool,
     ) {
         let error = error.with_operation(&context.operation_id, context.request_id.as_deref());
@@ -121,8 +122,8 @@ impl App {
         self.publish();
     }
 
-    pub(crate) fn mark_commit_uncertain(&self, context: &ChangeContext, error: DomainError) {
-        let uncertain = DomainError::new(
+    pub(crate) fn mark_commit_uncertain(&self, context: &ChangeContext, error: LegacyAppError) {
+        let uncertain = LegacyAppError::new(
             ErrorCode::CommitUncertain,
             ErrorStage::Confirm,
             format!(
@@ -159,7 +160,7 @@ impl App {
         self.publish();
     }
 
-    pub(crate) fn mark_degraded(&self, error: DomainError) {
+    pub(crate) fn mark_degraded(&self, error: LegacyAppError) {
         error!(%error, "core entered degraded mode");
         {
             let mut inner = self.inner.lock().expect("app state poisoned");
@@ -175,7 +176,7 @@ impl App {
         journal: &crate::domain::TransactionJournal,
         status: OperationStatus,
         revision: u64,
-        error: Option<DomainError>,
+        error: Option<LegacyAppError>,
     ) {
         if journal.source != OperationSource::User {
             return;
@@ -203,7 +204,7 @@ fn make_wifi_last_op(
     context: &ChangeContext,
     status: OperationStatus,
     revision: u64,
-    error: Option<DomainError>,
+    error: Option<LegacyAppError>,
 ) -> LastOperation {
     LastOperation {
         id: context.operation_id.clone(),
@@ -222,7 +223,7 @@ fn apply_wifi_success_state(
     inner: &mut Inner,
     context: &ChangeContext,
     last: LastOperation,
-    store_error: Option<DomainError>,
+    store_error: Option<LegacyAppError>,
 ) {
     if context.source == OperationSource::User {
         inner.last_user_operation = Some(last);
@@ -260,14 +261,14 @@ fn apply_wifi_failure_state(
     inner: &mut Inner,
     context: &ChangeContext,
     last: LastOperation,
-    error: DomainError,
+    error: LegacyAppError,
     rollback_failed: bool,
     store_failed: bool,
 ) {
     if context.source == OperationSource::User {
         inner.last_user_operation = Some(last);
         if store_failed {
-            inner.last_system_error = Some(DomainError::new(
+            inner.last_system_error = Some(LegacyAppError::new(
                 ErrorCode::StateStoreFailed,
                 ErrorStage::Persist,
                 "failed to clear transaction journal",
