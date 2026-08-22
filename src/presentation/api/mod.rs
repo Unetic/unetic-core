@@ -15,6 +15,42 @@ pub mod system;
 pub mod wan;
 pub mod wifi;
 
+pub const UBUS_METHODS: &[&str] = &[
+    "state.get",
+    "state.subscribe.create",
+    "state.subscribe.continue",
+    "state.subscribe.cancel",
+    "wifi.get",
+    "wifi.set_config",
+    "wan.get",
+    "wan.get_config",
+    "wan.set",
+    "wan.set_config",
+    "ports.list",
+    "system.info",
+    "devices.list",
+    "devices.register",
+    "devices.update",
+    "devices.delete",
+    "devices.add_port_forward",
+    "devices.remove_port_forward",
+    "dns.get",
+    "dns.set",
+    "dns.record.add",
+    "dns.record.remove",
+    "ddns.get",
+    "ddns.set",
+    "ddns.test",
+    "mesh.pair_accept",
+    "mesh.pair_reject",
+    "operation.get",
+    "maintenance.get",
+    "maintenance.enter",
+    "maintenance.exit",
+    "health.get",
+    "tools.ping",
+];
+
 #[derive(Serialize)]
 pub struct ApiEnvelope<T> {
     pub idempotence_token: String,
@@ -87,5 +123,19 @@ fn encode_error(error: u32, token: String, event_seq: u64) -> String {
         result: None,
     })
     .unwrap_or_else(|_| r#"{"error":1}"#.into())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashSet;
+
+    use super::UBUS_METHODS;
+
+    #[test]
+    fn ubus_methods_are_unique() {
+        let unique = UBUS_METHODS.iter().collect::<HashSet<_>>();
+
+        assert_eq!(unique.len(), UBUS_METHODS.len());
+    }
 }
 pub mod mesh;

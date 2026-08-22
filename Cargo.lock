@@ -1246,6 +1246,9 @@ dependencies = [
 [[package]]
 name = "unetic-openwrt-sys"
 version = "0.1.1"
+dependencies = [
+ "libc",
+]
 
 [[package]]
 name = "unicode-ident"

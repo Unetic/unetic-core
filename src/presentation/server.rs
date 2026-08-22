@@ -19,11 +19,12 @@ pub async fn run_event_loop(
         return Ok(());
     }
 
-    let bridge =
-        Bridge::load().map_err(|e| anyhow::anyhow!("failed to load OpenWrt ubus bridge: {}", e))?;
+    let bridge = Bridge::load().map_err(|e| anyhow::anyhow!("failed to initialize ubus: {e}"))?;
     let callback_app = Arc::clone(&app);
     let mut server = bridge
-        .server(move |method, request| api::dispatch(&callback_app, method, request))
+        .server(api::UBUS_METHODS, move |method, request| {
+            api::dispatch(&callback_app, method, request)
+        })
         .map_err(|e| anyhow::anyhow!("failed to register ubus object 'unetic': {}", e))?;
 
     info!("Unetic Core is ready on ubus object 'unetic'");
