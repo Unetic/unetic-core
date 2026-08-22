@@ -14,15 +14,15 @@ fn get_master_ip() -> String {
     if let Some(gw) = stdout.split_whitespace().nth(2) {
         return gw.to_string();
     }
-    "192.168.1.1".to_string()
+    crate::domain::FALLBACK_MASTER_IP.to_string()
 }
 
 pub fn start_extender_loop(app: Arc<App>) {
     tokio::spawn(async move {
         loop {
-            tokio::time::sleep(Duration::from_secs(3)).await;
+            tokio::time::sleep(Duration::from_secs(crate::domain::MESH_EXTENDER_RETRY_SECS)).await;
             let master_ip = get_master_ip();
-            let stream = match TcpStream::connect(format!("{}:9898", master_ip)).await {
+            let stream = match TcpStream::connect(format!("{}:{}", master_ip, crate::domain::MESH_SYNC_PORT)).await {
                 Ok(s) => s,
                 Err(_) => continue,
             };
@@ -118,7 +118,7 @@ async fn run_authenticated_extender(
     let tx_clone = tx.clone();
     tokio::spawn(async move {
         loop {
-            tokio::time::sleep(Duration::from_secs(10)).await;
+            tokio::time::sleep(Duration::from_secs(crate::domain::MESH_EXTENDER_TELEMETRY_SECS)).await;
             let ports = app_clone.ports_list().unwrap_or_default();
             let wireless_clients = crate::infrastructure::openwrt::devices::get_wireless_clients()
                 .into_iter()

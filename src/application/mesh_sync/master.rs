@@ -33,7 +33,7 @@ pub fn start_master_loop(app: Arc<App>, mut event_rx: tokio::sync::broadcast::Re
     });
 
     tokio::spawn(async move {
-        let listener = TcpListener::bind("0.0.0.0:9898").await.unwrap();
+        let listener = TcpListener::bind(format!("0.0.0.0:{}", crate::domain::MESH_SYNC_PORT)).await.unwrap();
         loop {
             if let Ok((stream, _)) = listener.accept().await {
                 let app_ref = Arc::clone(&app);

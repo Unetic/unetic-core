@@ -24,7 +24,7 @@ async fn main() -> Result<()> {
 
     let state_dir = std::env::var_os("UNETIC_STATE_DIR")
         .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("/etc/unetic"));
+        .unwrap_or_else(|| PathBuf::from(unetic_core::domain::DEFAULT_STATE_DIR));
 
     let is_memory = std::env::var("UNETIC_BACKEND").as_deref() == Ok("memory");
 

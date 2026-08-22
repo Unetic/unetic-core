@@ -7,7 +7,7 @@ use crate::infrastructure::openwrt::traffic::read_iface_counters;
 
 pub fn start_traffic_sampler(app: Arc<App>) {
     tokio::spawn(async move {
-        let mut interval = tokio::time::interval(Duration::from_secs(1));
+        let mut interval = tokio::time::interval(Duration::from_secs(crate::domain::TRAFFIC_SAMPLING_INTERVAL_SECS));
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         let mut prev: HashMap<String, (u64, u64)> = HashMap::new();
         loop {
