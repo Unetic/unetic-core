@@ -1,6 +1,6 @@
 use std::{sync::Arc, thread};
 
-use super::App;
+use super::{App, StateTopic};
 use crate::{
     domain::errors::{ErrorCode, ErrorStage, LegacyAppError},
     domain::{Lifecycle, MaintenanceState, PublicState},
@@ -28,7 +28,7 @@ impl App {
             inner.lifecycle = Lifecycle::Maintenance;
         }
 
-        Ok(self.publish())
+        Ok(self.publish(StateTopic::Maintenance))
     }
 
     pub fn maintenance_exit(self: &Arc<Self>) -> Result<PublicState, LegacyAppError> {
@@ -46,7 +46,7 @@ impl App {
             }
             inner.maintenance_exiting = true;
         }
-        self.publish();
+        self.publish(StateTopic::Maintenance);
 
         let app = Arc::clone(self);
         if let Err(error) = thread::Builder::new()
@@ -63,7 +63,7 @@ impl App {
             inner.last_system_error = Some(domain_error.clone());
             inner.lifecycle = Lifecycle::Degraded;
             drop(inner);
-            self.publish();
+            self.publish(StateTopic::Maintenance);
             return Err(domain_error);
         }
 
@@ -129,5 +129,5 @@ fn run_maintenance_exit(app: Arc<App>) {
     }
     drop(inner);
     app.refresh_observed();
-    app.publish();
+    app.publish(StateTopic::Maintenance);
 }

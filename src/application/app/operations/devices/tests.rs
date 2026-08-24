@@ -12,7 +12,7 @@ fn app() -> Arc<App> {
 
 fn device() -> RegisteredDevice {
     RegisteredDevice {
-        uuid: "phone_1".to_owned(),
+        id: "device-001122334455".to_owned(),
         mac: "00:11:22:33:44:55".to_owned(),
         name: "Phone".to_owned(),
         is_static_ip: false,
@@ -33,15 +33,15 @@ fn register_device_updates_state_without_deadlocking() {
 }
 
 #[test]
-fn update_rejects_uuid_changes() {
+fn update_rejects_device_id_changes() {
     let app = app();
     app.register_device(device()).expect("device registered");
     let mut changed = device();
-    changed.uuid = "different".to_owned();
+    changed.id = "device-66778899aabb".to_owned();
 
     let error = app
-        .update_device("phone_1", changed)
-        .expect_err("UUID change rejected");
+        .update_device("device-001122334455", changed)
+        .expect_err("device ID change rejected");
 
     assert_eq!(error.code, ErrorCode::InvalidArgument);
 }
@@ -54,7 +54,7 @@ fn update_rejects_mac_changes() {
     changed.mac = "66:77:88:99:aa:bb".to_owned();
 
     let error = app
-        .update_device("phone_1", changed)
+        .update_device("device-001122334455", changed)
         .expect_err("MAC change rejected");
 
     assert_eq!(error.code, ErrorCode::InvalidArgument);
@@ -67,7 +67,7 @@ fn remove_missing_port_forward_does_not_change_revision() {
     let revision = app.state().revision;
 
     let error = app
-        .remove_port_forward("phone_1", "missing")
+        .remove_port_forward("device-001122334455", "missing")
         .expect_err("missing rule rejected");
 
     assert_eq!(error.code, ErrorCode::NotFound);

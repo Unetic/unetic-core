@@ -5,62 +5,83 @@ use std::{collections::HashMap, fs, process::Command};
 use crate::{domain::device::Device, domain::errors::LegacyAppError};
 pub use catalog::{merge_devices, parse_arp_table, parse_dhcp_leases};
 
-pub fn get_wireless_clients() -> HashMap<String, i32> {
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WirelessClient {
+    pub interface: String,
+    pub network: Option<String>,
+    pub signal_dbm: i32,
+}
+
+pub fn get_wireless_clients() -> HashMap<String, WirelessClient> {
     let mut stations = HashMap::new();
-    let mut ifaces = Vec::new();
-
-    if let Ok(output) = Command::new("iw").arg("dev").output() {
-        if output.status.success() {
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            for line in stdout.lines() {
-                if let Some(rest) = line.trim().strip_prefix("Interface ") {
-                    let iface = rest.trim();
-                    if !iface.is_empty() {
-                        ifaces.push(iface.to_owned());
-                    }
-                }
-            }
+    for (interface, network) in wireless_interfaces() {
+        let object = format!("hostapd.{interface}");
+        let Ok(reply) = crate::infrastructure::openwrt::rpc::call_ubus(
+            &object,
+            "get_clients",
+            serde_json::json!({}),
+        ) else {
+            continue;
+        };
+        let Some(clients) = reply.get("clients").and_then(|clients| clients.as_object()) else {
+            continue;
+        };
+        for (mac, info) in clients {
+            let Some(signal_dbm) = info.get("signal").and_then(|signal| signal.as_i64()) else {
+                continue;
+            };
+            stations.insert(
+                mac.to_ascii_lowercase(),
+                WirelessClient {
+                    interface: interface.clone(),
+                    network: network.clone(),
+                    signal_dbm: signal_dbm as i32,
+                },
+            );
         }
     }
-
-    if ifaces.is_empty() {
-        if let Ok(entries) = fs::read_dir("/sys/class/net") {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.join("wireless").exists() || path.join("phy80211").exists() {
-                    if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                        ifaces.push(name.to_owned());
-                    }
-                }
-            }
-        }
-    }
-
-    if ifaces.is_empty() {
-        ifaces.push("wlan0".into());
-        ifaces.push("wlan1".into());
-    }
-
-    for iface in ifaces {
-        if let Ok(output) = Command::new("ubus")
-            .args(["call", &format!("hostapd.{}", iface), "get_clients"])
-            .output()
-        {
-            if output.status.success() {
-                if let Ok(json) = serde_json::from_slice::<serde_json::Value>(&output.stdout) {
-                    if let Some(clients) = json.get("clients").and_then(|c| c.as_object()) {
-                        for (mac, info) in clients {
-                            if let Some(signal) = info.get("signal").and_then(|s| s.as_i64()) {
-                                stations.insert(mac.to_ascii_lowercase(), signal as i32);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
     stations
+}
+
+fn wireless_interfaces() -> Vec<(String, Option<String>)> {
+    let mut interfaces = Vec::new();
+    if let Ok(reply) = crate::infrastructure::openwrt::rpc::call_ubus(
+        "network.wireless",
+        "status",
+        serde_json::json!({}),
+    ) {
+        if let Some(radios) = reply.as_object() {
+            for radio in radios.values() {
+                let Some(entries) = radio.get("interfaces").and_then(|value| value.as_array()) else {
+                    continue;
+                };
+                for entry in entries {
+                    let Some(interface) = entry.get("ifname").and_then(|value| value.as_str()) else {
+                        continue;
+                    };
+                    let network = entry
+                        .get("config")
+                        .and_then(|config| config.get("ssid"))
+                        .and_then(|ssid| ssid.as_str())
+                        .map(str::to_owned);
+                    interfaces.push((interface.to_owned(), network));
+                }
+            }
+        }
+    }
+
+    if interfaces.is_empty() && let Ok(entries) = fs::read_dir("/sys/class/net") {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !(path.join("wireless").exists() || path.join("phy80211").exists()) {
+                continue;
+            }
+            if let Some(name) = path.file_name().and_then(|name| name.to_str()) {
+                interfaces.push((name.to_owned(), None));
+            }
+        }
+    }
+    interfaces
 }
 
 pub fn read_devices(

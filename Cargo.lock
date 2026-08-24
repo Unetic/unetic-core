@@ -1231,6 +1231,7 @@ dependencies = [
  "netlink-packet-core",
  "netlink-packet-route",
  "netlink-sys",
+ "nix",
  "reqwest",
  "rtnetlink",
  "serde",

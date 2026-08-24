@@ -157,5 +157,11 @@ unsafe extern "C" {
 #[link(name = "blobmsg_json")]
 unsafe extern "C" {
     pub(super) fn blobmsg_add_json_from_string(buffer: *mut BlobBuf, json: *const c_char) -> bool;
-    pub(super) fn blobmsg_format_json(message: *mut BlobAttr, list: bool) -> *mut c_char;
+    pub(super) fn blobmsg_format_json_with_cb(
+        message: *mut BlobAttr,
+        list: bool,
+        callback: Option<unsafe extern "C" fn(*mut c_void, *mut BlobAttr) -> *const c_char>,
+        private: *mut c_void,
+        indent: c_int,
+    ) -> *mut c_char;
 }

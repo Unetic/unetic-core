@@ -1,5 +1,5 @@
 use crate::{
-    application::app::App,
+    application::app::{App, StateTopic},
     domain::{
         device::{PortForward, RegisteredDevice},
         errors::{ErrorCode, ErrorStage, LegacyAppError},
@@ -21,11 +21,12 @@ impl App {
         let static_ip = self.static_ip_for(&device, true)?;
 
         self.update_registered_devices(|devices| {
-            devices.retain(|registered| registered.uuid != device.uuid);
+            devices.retain(|registered| registered.id != device.id);
             devices.push(device.clone());
             Ok(())
         })?;
-        self.publish();
+        self.refresh_devices(false);
+        self.publish(StateTopic::Devices);
         if let Some(ip) = static_ip {
             self.backend
                 .write_static_lease(&device.mac, &ip, Some(&device.name))?;
@@ -35,20 +36,20 @@ impl App {
 
     pub fn update_device(
         &self,
-        uuid: &str,
+        id: &str,
         device: RegisteredDevice,
     ) -> Result<(), LegacyAppError> {
-        validate_identifier(uuid, "device UUID")?;
+        validate_identifier(id, "device ID")?;
         validate_device(&device)?;
-        if device.uuid != uuid {
-            return Err(invalid_argument("device UUID cannot be changed"));
+        if device.id != id {
+            return Err(invalid_argument("device ID cannot be changed"));
         }
 
         let previous = self
             .state()
             .registered_devices
             .into_iter()
-            .find(|registered| registered.uuid == uuid)
+            .find(|registered| registered.id == id)
             .ok_or_else(|| not_found("device"))?;
         if !previous.mac.eq_ignore_ascii_case(&device.mac) {
             return Err(invalid_argument("device MAC address cannot be changed"));
@@ -58,12 +59,12 @@ impl App {
         self.update_registered_devices(|devices| {
             let registered = devices
                 .iter_mut()
-                .find(|registered| registered.uuid == uuid)
+                .find(|registered| registered.id == id)
                 .ok_or_else(|| not_found("device"))?;
             *registered = device.clone();
             Ok(())
         })?;
-        self.publish();
+        self.publish(StateTopic::Devices);
         if previous.is_static_ip && !device.is_static_ip {
             self.backend.delete_static_lease(&device.mac)?;
         } else if let Some(ip) = static_ip {
@@ -73,18 +74,18 @@ impl App {
         self.sync_registered_devices()
     }
 
-    pub fn delete_device(&self, uuid: &str) -> Result<(), LegacyAppError> {
-        validate_identifier(uuid, "device UUID")?;
+    pub fn unregister_device(&self, id: &str) -> Result<(), LegacyAppError> {
+        validate_identifier(id, "device ID")?;
 
         let removed = self.update_registered_devices(|devices| {
             let index = devices
                 .iter()
-                .position(|device| device.uuid == uuid)
+                .position(|device| device.id == id)
                 .ok_or_else(|| not_found("device"))?;
             Ok(devices.remove(index))
         })?;
 
-        self.publish();
+        self.publish(StateTopic::Devices);
         if removed.is_static_ip {
             self.backend.delete_static_lease(&removed.mac)?;
         }
@@ -93,34 +94,33 @@ impl App {
 
     pub fn add_port_forward(
         &self,
-        uuid: &str,
-        mut rule: PortForward,
+        id: &str,
+        rule: PortForward,
     ) -> Result<(), LegacyAppError> {
-        validate_identifier(uuid, "device UUID")?;
+        validate_identifier(id, "device ID")?;
         validate_port_forward(&rule)?;
-        rule.protocol = normalize_protocol(&rule.protocol)?.to_owned();
 
         self.update_registered_devices(|devices| {
             let device = devices
                 .iter_mut()
-                .find(|device| device.uuid == uuid)
+                .find(|device| device.id == id)
                 .ok_or_else(|| not_found("device"))?;
             device.port_forwards.retain(|current| current.id != rule.id);
             device.port_forwards.push(rule);
             Ok(())
         })?;
-        self.publish();
+        self.publish(StateTopic::Devices);
         self.sync_registered_devices()
     }
 
-    pub fn remove_port_forward(&self, uuid: &str, rule_id: &str) -> Result<(), LegacyAppError> {
-        validate_identifier(uuid, "device UUID")?;
+    pub fn remove_port_forward(&self, id: &str, rule_id: &str) -> Result<(), LegacyAppError> {
+        validate_identifier(id, "device ID")?;
         validate_identifier(rule_id, "port-forward ID")?;
 
         self.update_registered_devices(|devices| {
             let device = devices
                 .iter_mut()
-                .find(|device| device.uuid == uuid)
+                .find(|device| device.id == id)
                 .ok_or_else(|| not_found("device"))?;
             let original_len = device.port_forwards.len();
             device.port_forwards.retain(|rule| rule.id != rule_id);
@@ -129,7 +129,7 @@ impl App {
             }
             Ok(())
         })?;
-        self.publish();
+        self.publish(StateTopic::Devices);
         self.sync_registered_devices()
     }
 
@@ -202,7 +202,10 @@ impl App {
 }
 
 fn validate_device(device: &RegisteredDevice) -> Result<(), LegacyAppError> {
-    validate_identifier(&device.uuid, "device UUID")?;
+    validate_identifier(&device.id, "device ID")?;
+    if device.id != crate::domain::device_inventory::DeviceRuntime::id_for_mac(&device.mac) {
+        return Err(invalid_argument("device ID does not match its MAC address"));
+    }
     if !is_valid_mac(&device.mac) {
         return Err(invalid_argument("invalid device MAC address"));
     }
@@ -222,17 +225,7 @@ fn validate_port_forward(rule: &PortForward) -> Result<(), LegacyAppError> {
     if !(1..=65_535).contains(&rule.external_port) || !(1..=65_535).contains(&rule.internal_port) {
         return Err(invalid_argument("port must be between 1 and 65535"));
     }
-    normalize_protocol(&rule.protocol)?;
     Ok(())
-}
-
-fn normalize_protocol(protocol: &str) -> Result<&'static str, LegacyAppError> {
-    match protocol.to_ascii_lowercase().replace(',', " ").as_str() {
-        "tcp" => Ok("tcp"),
-        "udp" => Ok("udp"),
-        "tcp udp" | "udp tcp" | "both" => Ok("tcp udp"),
-        _ => Err(invalid_argument("protocol must be tcp, udp, or both")),
-    }
 }
 
 fn validate_identifier(value: &str, label: &str) -> Result<(), LegacyAppError> {

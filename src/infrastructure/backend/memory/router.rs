@@ -333,8 +333,53 @@ impl RouterBackend for MemoryBackend {
         Ok(super::mock::mock_ports_info())
     }
 
+    fn read_traffic_counters(
+        &self,
+    ) -> Result<crate::domain::traffic::TrafficCounters, LegacyAppError> {
+        Ok(self
+            .state
+            .lock()
+            .expect("memory backend poisoned")
+            .traffic_counters)
+    }
+
+    fn read_switch_state(&self) -> Result<crate::domain::ports::SwitchState, LegacyAppError> {
+        Ok(self
+            .state
+            .lock()
+            .expect("memory backend poisoned")
+            .switch_state)
+    }
+
+    fn set_hw_offload(
+        &self,
+        enabled: bool,
+    ) -> Result<crate::domain::ports::SwitchState, LegacyAppError> {
+        let mut state = self.state.lock().expect("memory backend poisoned");
+        if enabled && !state.switch_state.hw_offload.available {
+            return Err(LegacyAppError::new(
+                ErrorCode::InvalidArgument,
+                ErrorStage::Validate,
+                "hardware flow offload is unavailable",
+            ));
+        }
+        if state.failure.fail_switch_reload {
+            return Err(LegacyAppError::new(
+                ErrorCode::UciApplyFailed,
+                ErrorStage::Apply,
+                "injected firewall reload failure",
+            ));
+        }
+        state.switch_state.hw_offload.enabled = enabled;
+        Ok(state.switch_state)
+    }
+
     fn read_system_info(&self) -> Result<crate::domain::system::SystemInfo, LegacyAppError> {
         Ok(super::mock::mock_system_info())
+    }
+
+    fn read_system_runtime(&self) -> Result<crate::domain::system::SystemRuntime, LegacyAppError> {
+        Ok(super::mock::mock_system_runtime())
     }
 
     fn read_devices(

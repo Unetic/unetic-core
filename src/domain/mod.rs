@@ -5,6 +5,7 @@ pub mod system;
 
 pub use core::errors;
 pub use mesh::device;
+pub use mesh::device_inventory;
 pub use mesh::extender;
 pub use network::ddns;
 pub use network::dns;
@@ -17,6 +18,7 @@ pub use network::wifi;
 pub use self::core::constants::*;
 pub use self::core::errors::*;
 pub use self::mesh::device::*;
+pub use self::mesh::device_inventory::*;
 pub use self::mesh::extender::*;
 pub use self::network::ddns::*;
 pub use self::network::dns::*;

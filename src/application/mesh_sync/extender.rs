@@ -1,6 +1,6 @@
 use crate::application::app::App;
 use crate::domain::extender::{MeshClientMessage, MeshServerMessage};
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
@@ -137,19 +137,23 @@ async fn run_authenticated_extender(
             ))
             .await;
             let ports = app_clone.ports_list().unwrap_or_default();
-            let wireless_clients = crate::infrastructure::openwrt::devices::get_wireless_clients()
-                .into_iter()
-                .map(
-                    |(c_mac, signal_dbm)| crate::domain::extender::ExtenderClient {
-                        mac: c_mac,
-                        signal_dbm,
+            let mut clients = clients_on_extender_ports(&ports);
+            for (mac, client) in crate::infrastructure::openwrt::devices::get_wireless_clients() {
+                clients.insert(
+                    mac.clone(),
+                    crate::domain::extender::ExtenderClient {
+                        mac,
+                        signal_dbm: Some(client.signal_dbm),
+                        interface: Some(client.interface),
+                        network: client.network,
+                        port_id: None,
                     },
-                )
-                .collect();
+                );
+            }
             let msg = MeshClientMessage::Telemetry {
                 mac: mac_clone.clone(),
                 ports,
-                wireless_clients,
+                wireless_clients: clients.into_values().collect(),
             };
             if let Ok(json) = serde_json::to_string(&msg) {
                 if tx_clone.send(format!("{}\n", json)).await.is_err() {
@@ -177,6 +181,32 @@ async fn run_authenticated_extender(
         }
     }
     Ok(())
+}
+
+fn clients_on_extender_ports(
+    ports: &[crate::domain::ports::PhysicalPort],
+) -> HashMap<String, crate::domain::extender::ExtenderClient> {
+    let mut clients = HashMap::new();
+    for port in ports {
+        for connection in &port.connections {
+            let Some(mac) = crate::domain::device_inventory::DeviceRuntime::mac_from_id(
+                &connection.device_id,
+            ) else {
+                continue;
+            };
+            clients.insert(
+                mac.clone(),
+                crate::domain::extender::ExtenderClient {
+                    mac,
+                    signal_dbm: None,
+                    interface: None,
+                    network: None,
+                    port_id: Some(port.id.clone()),
+                },
+            );
+        }
+    }
+    clients
 }
 
 async fn handle_server_message(msg: MeshServerMessage, app: &Arc<App>) {

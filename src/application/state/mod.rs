@@ -1,14 +1,14 @@
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     fs,
     sync::atomic::Ordering,
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use serde_json::json;
 use tracing::warn;
 
-use crate::application::app::{App, Inner};
+use crate::application::app::{App, Inner, PendingStateUpdate, StateTopic, StateUpdateBuffer};
 use crate::{
     domain::errors::{ErrorCode, ErrorStage, LegacyAppError},
     domain::{
@@ -16,15 +16,74 @@ use crate::{
     },
 };
 
+const STATE_PUBLISH_INTERVAL_MILLIS: u64 = 1_000;
+pub(crate) const STATE_PUBLISH_INTERVAL: Duration =
+    Duration::from_millis(STATE_PUBLISH_INTERVAL_MILLIS);
+const EARLY_FLUSH_MIN_INTERVAL: Duration = Duration::from_millis(STATE_PUBLISH_INTERVAL_MILLIS / 2);
+
 impl App {
-    pub(crate) fn publish(&self) -> PublicState {
-        let state = {
+    pub(crate) fn publish(&self, topic: StateTopic) -> PublicState {
+        let state = self.state();
+        self.queue_state_update(topic, state.clone(), true);
+        state
+    }
+
+    pub(crate) fn publish_system_runtime(&self) {
+        self.queue_state_update(StateTopic::SystemRuntime, self.state(), false);
+    }
+
+    pub(crate) fn flush_state_update(&self) {
+        let mut updates = self.state_updates.lock().expect("state updates poisoned");
+        self.send_pending_state(&mut updates);
+    }
+
+    fn can_flush_early(&self, last_sent_at: &Option<Instant>) -> bool {
+        last_sent_at.is_none_or(|sent_at| sent_at.elapsed() >= EARLY_FLUSH_MIN_INTERVAL)
+    }
+
+    pub(crate) fn queue_state_update(
+        &self,
+        topic: StateTopic,
+        state: PublicState,
+        allow_early_flush: bool,
+    ) {
+        let mut updates = self.state_updates.lock().expect("state updates poisoned");
+        let repeats_pending_topic = updates
+            .pending
+            .as_ref()
+            .is_some_and(|pending| pending.topics.contains(&topic));
+
+        if allow_early_flush && repeats_pending_topic && self.can_flush_early(&updates.last_sent_at)
+        {
+            self.send_pending_state(&mut updates);
+        }
+
+        match updates.pending.as_mut() {
+            Some(pending) => {
+                pending.state = state;
+                pending.topics.insert(topic);
+            }
+            None => {
+                updates.pending = Some(PendingStateUpdate {
+                    state,
+                    topics: BTreeSet::from([topic]),
+                });
+            }
+        }
+    }
+
+    fn send_pending_state(&self, updates: &mut StateUpdateBuffer) {
+        let Some(mut pending) = updates.pending.take() else {
+            return;
+        };
+
+        pending.state.event_seq = {
             let mut inner = self.inner.lock().expect("app state poisoned");
             inner.event_seq = inner.event_seq.saturating_add(1);
-            snapshot(&inner)
+            inner.event_seq
         };
-        let _ = self.event_tx.send(state.clone());
-        state
+        let _ = self.event_tx.send(pending.state);
+        updates.last_sent_at = Some(Instant::now());
     }
 
     pub(crate) fn next_operation_id(&self) -> String {
@@ -199,7 +258,12 @@ pub(crate) fn snapshot(inner: &Inner) -> PublicState {
             fields: drift_fields,
         },
         health: inner.health.clone(),
+        system: crate::domain::system::SystemState {
+            info: inner.system_info.clone(),
+            runtime: inner.system_runtime.clone(),
+        },
         registered_devices: inner.config.registered_devices.clone(),
+        devices: inner.devices.devices(),
         dns: inner.config.dns.clone(),
         traffic: inner.traffic.clone(),
         ddns_config: inner.config.ddns.clone(),

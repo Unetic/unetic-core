@@ -29,7 +29,7 @@ impl StateStore {
             use std::os::unix::fs::PermissionsExt;
             fs::set_permissions(&self.root, fs::Permissions::from_mode(0o700))
                 .map_err(store_error)?;
-            for name in ["config.json", "transaction.json"] {
+            for name in ["config.json", "transaction.json", "devices.json"] {
                 let path = self.root.join(name);
                 if path.exists() {
                     fs::set_permissions(path, fs::Permissions::from_mode(0o600))
@@ -63,6 +63,19 @@ impl StateStore {
             Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
             Err(error) => Err(store_error(error)),
         }
+    }
+
+    pub fn load_device_inventory(
+        &self,
+    ) -> Result<Option<crate::domain::device_inventory::DeviceInventory>, LegacyAppError> {
+        self.read_json("devices.json")
+    }
+
+    pub fn persist_device_inventory(
+        &self,
+        value: &crate::domain::device_inventory::DeviceInventory,
+    ) -> Result<(), LegacyAppError> {
+        self.write_json("devices.json", value)
     }
 
     fn read_json<T: DeserializeOwned>(&self, name: &str) -> Result<Option<T>, LegacyAppError> {

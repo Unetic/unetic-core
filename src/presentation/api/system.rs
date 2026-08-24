@@ -50,12 +50,18 @@ mod tests {
         assert_eq!(devices[0].mac, "00:11:22:33:44:55");
         assert_eq!(
             devices[0].connection,
-            crate::domain::device::DeviceConnection::Wireless { signal_dbm: -82 }
+            crate::domain::device::DeviceConnection::Wireless {
+                signal_dbm: -82,
+                interface: "wlan0".into(),
+                network: Some("Unetic".into()),
+            }
         );
         assert_eq!(devices[1].mac, "66:77:88:99:aa:bb");
         assert_eq!(
             devices[1].connection,
-            crate::domain::device::DeviceConnection::Wired { port_id: 1 }
+            crate::domain::device::DeviceConnection::Wired {
+                port_id: "lan1".into(),
+            }
         );
     }
 }

@@ -3,7 +3,10 @@ use std::{
     sync::Mutex,
 };
 
-use crate::domain::{RoamingConfig, WanDesired, WanPublicState, WanStatus, WifiNetworkConfig};
+use crate::domain::{
+    RoamingConfig, SwitchState, TrafficBytes, TrafficCounters, WanDesired, WanPublicState,
+    WanStatus, WifiNetworkConfig,
+};
 
 mod mock;
 mod router;
@@ -18,6 +21,7 @@ pub struct FailurePlan {
     pub fail_candidate_verify: bool,
     pub fail_wan_candidate_verify: bool,
     pub fail_wan_runtime_read: bool,
+    pub fail_switch_reload: bool,
     pub runtime_unhealthy: bool,
 }
 
@@ -35,6 +39,8 @@ pub(crate) struct MemoryState {
     pub(crate) wan_runtime: WanPublicState,
     pub(crate) next_session: u64,
     pub(crate) failure: FailurePlan,
+    pub(crate) traffic_counters: TrafficCounters,
+    pub(crate) switch_state: SwitchState,
 }
 
 #[derive(Debug)]
@@ -117,12 +123,34 @@ impl MemoryBackend {
                 wan_runtime,
                 next_session: 1,
                 failure: FailurePlan::default(),
+                traffic_counters: TrafficCounters::default(),
+                switch_state: SwitchState {
+                    hw_offload: crate::domain::ports::HardwareOffload {
+                        available: true,
+                        enabled: false,
+                    },
+                },
             }),
         }
     }
 
     pub fn set_failure_plan(&self, failure: FailurePlan) {
         self.state.lock().expect("memory backend poisoned").failure = failure;
+    }
+
+    pub fn advance_traffic(&self, wan: TrafficBytes, lan: TrafficBytes) {
+        let mut state = self.state.lock().expect("memory backend poisoned");
+        state.traffic_counters.wan = state.traffic_counters.wan + wan;
+        state.traffic_counters.lan = state.traffic_counters.lan + lan;
+    }
+
+    pub fn set_hw_offload_available(&self, available: bool) {
+        self.state
+            .lock()
+            .expect("memory backend poisoned")
+            .switch_state
+            .hw_offload
+            .available = available;
     }
 
     #[must_use]

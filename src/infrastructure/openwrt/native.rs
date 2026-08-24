@@ -12,11 +12,15 @@ use crate::{
     infrastructure::backend::RouterBackend,
 };
 
-pub struct OpenWrtBackend;
+pub struct OpenWrtBackend {
+    temperature_reader: super::temperature::TemperatureReader,
+}
 
 impl OpenWrtBackend {
     pub fn new() -> Result<Self, LegacyAppError> {
-        Ok(Self)
+        Ok(Self {
+            temperature_reader: super::temperature::TemperatureReader::new(),
+        })
     }
 }
 
@@ -219,8 +223,29 @@ impl RouterBackend for OpenWrtBackend {
         Ok(super::ports::ports_list(&devices, wan.as_deref()))
     }
 
+    fn read_traffic_counters(
+        &self,
+    ) -> Result<crate::domain::traffic::TrafficCounters, LegacyAppError> {
+        super::traffic::read_traffic_counters(self.read_wan_runtime_status()?.device.as_deref())
+    }
+
+    fn read_switch_state(&self) -> Result<crate::domain::ports::SwitchState, LegacyAppError> {
+        super::ports::read_switch_state()
+    }
+
+    fn set_hw_offload(
+        &self,
+        enabled: bool,
+    ) -> Result<crate::domain::ports::SwitchState, LegacyAppError> {
+        super::ports::set_hw_offload(enabled)
+    }
+
     fn read_system_info(&self) -> Result<crate::domain::system::SystemInfo, LegacyAppError> {
         Ok(super::system::read_system_info())
+    }
+
+    fn read_system_runtime(&self) -> Result<crate::domain::system::SystemRuntime, LegacyAppError> {
+        Ok(super::system::read_system_runtime(&self.temperature_reader))
     }
 
     fn read_devices(

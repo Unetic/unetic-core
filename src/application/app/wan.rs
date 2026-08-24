@@ -2,7 +2,7 @@ use std::{sync::Arc, thread};
 
 use serde_json::json;
 
-use super::{App, Inner};
+use super::{App, Inner, StateTopic};
 use crate::{
     application::state::now_ms,
     application::wan::WanChangeContext,
@@ -51,7 +51,7 @@ impl App {
         };
 
         if let Some(accepted) = noop_result {
-            self.publish();
+            self.publish(StateTopic::Operation);
             return Ok(accepted);
         }
 
@@ -69,7 +69,7 @@ impl App {
             inner.active_operation = None;
             return Err(error.with_operation(&context.operation_id, context.request_id.as_deref()));
         }
-        self.publish();
+        self.publish(StateTopic::Operation);
 
         let operation_id = context.operation_id.clone();
         let app = Arc::clone(self);

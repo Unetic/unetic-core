@@ -50,7 +50,16 @@ pub trait RouterBackend: Send + Sync {
     fn runtime_healthy(&self, targets: &[String], ssid: &str) -> Result<bool, LegacyAppError>;
     fn reload_wireless_runtime(&self) -> Result<(), LegacyAppError>;
     fn ports_list(&self) -> Result<Vec<crate::domain::ports::PhysicalPort>, LegacyAppError>;
+    fn read_traffic_counters(
+        &self,
+    ) -> Result<crate::domain::traffic::TrafficCounters, LegacyAppError>;
+    fn read_switch_state(&self) -> Result<crate::domain::ports::SwitchState, LegacyAppError>;
+    fn set_hw_offload(
+        &self,
+        enabled: bool,
+    ) -> Result<crate::domain::ports::SwitchState, LegacyAppError>;
     fn read_system_info(&self) -> Result<crate::domain::system::SystemInfo, LegacyAppError>;
+    fn read_system_runtime(&self) -> Result<crate::domain::system::SystemRuntime, LegacyAppError>;
     fn read_devices(
         &self,
         extenders: &[crate::domain::extender::KnownExtender],

@@ -35,7 +35,14 @@ impl From<&KnownExtender> for PublicExtender {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ExtenderClient {
     pub mac: String,
-    pub signal_dbm: i32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signal_dbm: Option<i32>,
+    #[serde(default)]
+    pub interface: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub network: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub port_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -120,5 +127,24 @@ mod tests {
 
         assert_eq!(value["roaming"]["mode"], "aggressive");
         assert_eq!(value["roaming"]["sensitivity"], "high");
+    }
+
+    #[test]
+    fn old_extender_telemetry_keeps_new_client_location_optional() {
+        let message: MeshClientMessage = serde_json::from_str(
+            r#"{"type":"Telemetry","mac":"00:11:22:33:44:55","ports":[],"wireless_clients":[{"mac":"aa:bb:cc:dd:ee:ff","signal_dbm":-50}]}"#,
+        )
+        .expect("old telemetry message");
+
+        let MeshClientMessage::Telemetry {
+            wireless_clients, ..
+        } = message
+        else {
+            panic!("expected telemetry message");
+        };
+        assert_eq!(wireless_clients[0].interface, None);
+        assert_eq!(wireless_clients[0].signal_dbm, Some(-50));
+        assert_eq!(wireless_clients[0].network, None);
+        assert_eq!(wireless_clients[0].port_id, None);
     }
 }

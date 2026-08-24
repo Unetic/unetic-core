@@ -1,5 +1,16 @@
 use serde::{Deserialize, Serialize};
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct HardwareOffload {
+    pub available: bool,
+    pub enabled: bool,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct SwitchState {
+    pub hw_offload: HardwareOffload,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum PortType {
     #[serde(rename = "wan")]
@@ -22,15 +33,12 @@ pub enum PortSpeed {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PortConnection {
-    pub mac: String,
-    pub ip: Option<String>,
-    pub hostname: Option<String>,
+    pub device_id: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PhysicalPort {
     pub id: String,
-    pub name: String,
     pub port_type: PortType,
     pub speed: PortSpeed,
     pub connections: Vec<PortConnection>,

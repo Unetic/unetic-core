@@ -1,5 +1,5 @@
 use crate::{
-    application::app::App,
+    application::app::{App, StateTopic},
     domain::{
         DdnsConfig, DdnsProvider, DdnsStatus,
         errors::{ErrorCode, ErrorStage, LegacyAppError},
@@ -24,7 +24,7 @@ impl App {
         self.store.persist_config(&desired)?;
         inner.config = desired;
         drop(inner);
-        self.publish();
+        self.publish(StateTopic::Ddns);
         Ok(())
     }
 
@@ -37,7 +37,7 @@ impl App {
         let mut inner = self.inner.lock().expect("app state poisoned");
         inner.ddns_status = status;
         drop(inner);
-        self.publish();
+        self.publish(StateTopic::Ddns);
     }
 }
 

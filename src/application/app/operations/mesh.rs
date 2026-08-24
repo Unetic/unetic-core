@@ -1,5 +1,5 @@
 use crate::{
-    application::{app::App, transaction::force_state_sync},
+    application::{app::{App, StateTopic}, transaction::force_state_sync},
     domain::{
         OperationSource, WifiNetworkConfig,
         errors::{ErrorCode, ErrorStage, LegacyAppError},
@@ -37,7 +37,7 @@ impl App {
             .retain(|extender| !extender.mac.eq_ignore_ascii_case(&mac));
         inner.approved_pairings.insert(mac, pending.pairing_key);
         drop(inner);
-        self.publish();
+        self.publish(StateTopic::Extenders);
         Ok(())
     }
 
@@ -51,7 +51,7 @@ impl App {
             return Err(not_found("pending extender"));
         }
         drop(inner);
-        self.publish();
+        self.publish(StateTopic::Extenders);
         Ok(())
     }
 
@@ -87,7 +87,7 @@ impl App {
         inner.config = desired;
         drop(inner);
         self.refresh_observed();
-        self.publish();
+        self.publish(StateTopic::Extenders);
         Ok(())
     }
 }

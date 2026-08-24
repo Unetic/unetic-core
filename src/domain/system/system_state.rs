@@ -10,10 +10,7 @@ pub struct SystemInfo {
     pub target: String,
     pub arch: String,
     pub kernel_version: String,
-    pub uptime_secs: u64,
-    pub load_average: [f32; 3],
-    pub memory_total_kb: u64,
-    pub memory_available_kb: u64,
+    pub cpu_count: u32,
 }
 
 impl Default for SystemInfo {
@@ -27,10 +24,7 @@ impl Default for SystemInfo {
             target: String::new(),
             arch: String::new(),
             kernel_version: String::new(),
-            uptime_secs: 0,
-            load_average: [0.0; 3],
-            memory_total_kb: 0,
-            memory_available_kb: 0,
+            cpu_count: 1,
         }
     }
 }
@@ -100,7 +94,10 @@ pub struct PublicState {
     pub last_system_error: Option<crate::domain::errors::LegacyAppError>,
     pub drift: DriftState,
     pub health: HealthState,
+    pub system: super::runtime::SystemState,
     pub registered_devices: Vec<crate::domain::device::RegisteredDevice>,
+    #[serde(default)]
+    pub devices: Vec<crate::domain::device_inventory::DeviceRuntime>,
     pub dns: crate::domain::DnsConfig,
     #[serde(default)]
     pub traffic: crate::domain::traffic::TrafficState,

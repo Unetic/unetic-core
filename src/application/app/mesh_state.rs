@@ -1,4 +1,4 @@
-use super::App;
+use super::{App, StateTopic};
 use crate::domain::{
     errors::LegacyAppError,
     extender::{ExtenderClient, PendingExtender, ScannedNetwork},
@@ -20,7 +20,7 @@ impl App {
         }
         inner.pending_extenders.push(extender);
         drop(inner);
-        self.publish();
+        self.publish(StateTopic::Extenders);
     }
 
     pub(crate) fn take_approved_pairing_token(
@@ -64,7 +64,7 @@ impl App {
         self.store.persist_config(&config)?;
         inner.config = config;
         drop(inner);
-        self.publish();
+        self.publish(StateTopic::Extenders);
         Ok(())
     }
 
@@ -74,16 +74,41 @@ impl App {
             .expect("app state poisoned")
             .extender_ports
             .insert(mac, ports);
-        self.publish();
+        self.publish(StateTopic::Extenders);
     }
 
-    pub(crate) fn update_extender_telemetry(&self, mac: String, clients: Vec<ExtenderClient>) {
-        self.inner
+    pub(crate) fn update_extender_telemetry(
+        &self,
+        mac: String,
+        clients: Vec<ExtenderClient>,
+    ) -> bool {
+        let changed = {
+            let mut inner = self.inner.lock().expect("app state poisoned");
+            if inner.extender_clients.get(&mac) == Some(&clients) {
+                false
+            } else {
+                inner.extender_clients.insert(mac, clients);
+                true
+            }
+        };
+        if !changed {
+            return false;
+        }
+        self.publish(StateTopic::Extenders);
+        true
+    }
+
+    pub(crate) fn clear_extender_telemetry(&self, mac: &str) {
+        let removed = self
+            .inner
             .lock()
             .expect("app state poisoned")
             .extender_clients
-            .insert(mac, clients);
-        self.publish();
+            .remove(mac)
+            .is_some();
+        if removed {
+            self.publish(StateTopic::Extenders);
+        }
     }
 
     pub(crate) fn update_scan_results(&self, mac: String, networks: Vec<ScannedNetwork>) {
@@ -92,6 +117,6 @@ impl App {
             .expect("app state poisoned")
             .latest_scans
             .insert(mac, networks);
-        self.publish();
+        self.publish(StateTopic::Extenders);
     }
 }

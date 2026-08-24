@@ -1,7 +1,7 @@
 use tracing::error;
 
 use crate::{
-    application::app::{App, Inner},
+    application::app::{App, Inner, StateTopic},
     application::state::now_ms,
     application::wan::WanChangeContext,
     domain::errors::{ErrorCode, ErrorStage, LegacyAppError},
@@ -53,7 +53,7 @@ impl App {
             let mut inner = self.inner.lock().expect("app state poisoned");
             apply_wan_success_state(&mut inner, context, last, wan_status, store_error);
         }
-        self.publish();
+        self.publish(StateTopic::Wan);
         Ok(())
     }
 
@@ -100,7 +100,7 @@ impl App {
             );
         }
         self.refresh_observed();
-        self.publish();
+        self.publish(StateTopic::Wan);
     }
 
     pub(crate) fn mark_wan_commit_uncertain(
@@ -142,7 +142,7 @@ impl App {
             inner.health.core = "error".into();
             inner.last_system_error = Some(uncertain);
         }
-        self.publish();
+        self.publish(StateTopic::Wan);
     }
 
     pub(crate) fn record_recovered_wan_operation(

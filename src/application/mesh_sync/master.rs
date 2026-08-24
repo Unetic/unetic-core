@@ -84,7 +84,11 @@ async fn handle_client(
         }
         MeshClientMessage::Auth { token } => {
             if let Some(mac) = handle_auth(&mut w, &app, &token).await? {
-                run_authenticated_master(&mut w, &mut reader, &app, wifi_rx, &mac).await?;
+                let result = run_authenticated_master(&mut w, &mut reader, &app, wifi_rx, &mac).await;
+                app.clear_extender_telemetry(&mac);
+                let refresh_app = Arc::clone(&app);
+                tokio::task::spawn_blocking(move || refresh_app.refresh_devices(true));
+                result?;
             }
         }
         _ => {}
@@ -182,7 +186,10 @@ async fn run_authenticated_master(
                     match msg {
                         MeshClientMessage::Telemetry { ports, wireless_clients, .. } => {
                             app.update_extender_ports(authenticated_mac.to_owned(), ports);
-                            app.update_extender_telemetry(authenticated_mac.to_owned(), wireless_clients);
+                            if app.update_extender_telemetry(authenticated_mac.to_owned(), wireless_clients) {
+                                let app = Arc::clone(app);
+                                tokio::task::spawn_blocking(move || app.refresh_devices(true));
+                            }
                         }
                         MeshClientMessage::ScanResults { networks, .. } => {
                             app.update_scan_results(authenticated_mac.to_owned(), networks);

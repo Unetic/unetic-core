@@ -2,8 +2,117 @@ use std::collections::HashMap;
 use std::fs;
 use std::process::Command;
 
-use crate::domain::device::Device;
-use crate::domain::ports::{PhysicalPort, PortConnection, PortSpeed, PortType};
+use crate::domain::{device::Device, device_inventory::DeviceRuntime};
+use crate::domain::{
+    errors::{ErrorCode, ErrorStage, LegacyAppError},
+    ports::{HardwareOffload, PhysicalPort, PortConnection, PortSpeed, PortType, SwitchState},
+};
+
+pub(crate) fn read_switch_state() -> Result<SwitchState, LegacyAppError> {
+    let software = uci_get("flow_offloading")?;
+    let hardware = uci_get("flow_offloading_hw")?;
+    Ok(SwitchState {
+        hw_offload: HardwareOffload {
+            available: hardware.is_some(),
+            enabled: software.as_deref() == Some("1") && hardware.as_deref() == Some("1"),
+        },
+    })
+}
+
+pub(crate) fn set_hw_offload(enabled: bool) -> Result<SwitchState, LegacyAppError> {
+    let previous = read_switch_state()?;
+    let previous_software = uci_get("flow_offloading")?.as_deref() == Some("1");
+    if enabled && !previous.hw_offload.available {
+        return Err(LegacyAppError::new(
+            ErrorCode::InvalidArgument,
+            ErrorStage::Validate,
+            "hardware flow offload is unavailable",
+        ));
+    }
+    if previous.hw_offload.enabled == enabled {
+        return Ok(previous);
+    }
+    if enabled {
+        set_uci("flow_offloading", "1")?;
+    }
+    set_uci("flow_offloading_hw", if enabled { "1" } else { "0" })?;
+    if let Err(error) = reload_firewall().and_then(|()| verify_hw_offload(enabled)) {
+        let _ = restore_switch_state(previous_software, previous.hw_offload.enabled);
+        return Err(error);
+    }
+    read_switch_state()
+}
+
+fn verify_hw_offload(enabled: bool) -> Result<(), LegacyAppError> {
+    if read_switch_state()?.hw_offload.enabled == enabled {
+        return Ok(());
+    }
+    Err(LegacyAppError::new(
+        ErrorCode::VerifyMismatch,
+        ErrorStage::Verify,
+        "firewall did not apply hardware flow offload",
+    ))
+}
+
+fn restore_switch_state(
+    software_enabled: bool,
+    hardware_enabled: bool,
+) -> Result<(), LegacyAppError> {
+    set_uci("flow_offloading", if software_enabled { "1" } else { "0" })?;
+    set_uci(
+        "flow_offloading_hw",
+        if hardware_enabled { "1" } else { "0" },
+    )?;
+    reload_firewall()
+}
+
+fn uci_get(option: &str) -> Result<Option<String>, LegacyAppError> {
+    let assignment = format!("firewall.@defaults[0].{option}");
+    let output = Command::new("uci")
+        .args(["-q", "get", &assignment])
+        .output()
+        .map_err(|error| {
+            LegacyAppError::new(
+                ErrorCode::UciReadFailed,
+                ErrorStage::Verify,
+                error.to_string(),
+            )
+        })?;
+    if !output.status.success() {
+        return Ok(None);
+    }
+    Ok(Some(
+        String::from_utf8_lossy(&output.stdout).trim().to_owned(),
+    ))
+}
+
+fn set_uci(option: &str, value: &str) -> Result<(), LegacyAppError> {
+    let assignment = format!("firewall.@defaults[0].{option}={value}");
+    run_command("uci", ["set", &assignment])?;
+    run_command("uci", ["commit", "firewall"])
+}
+
+fn reload_firewall() -> Result<(), LegacyAppError> {
+    run_command("/etc/init.d/firewall", ["reload"])
+}
+
+fn run_command<const N: usize>(program: &str, args: [&str; N]) -> Result<(), LegacyAppError> {
+    let output = Command::new(program).args(args).output().map_err(|error| {
+        LegacyAppError::new(
+            ErrorCode::UciApplyFailed,
+            ErrorStage::Apply,
+            error.to_string(),
+        )
+    })?;
+    if output.status.success() {
+        return Ok(());
+    }
+    Err(LegacyAppError::new(
+        ErrorCode::UciApplyFailed,
+        ErrorStage::Apply,
+        String::from_utf8_lossy(&output.stderr),
+    ))
+}
 
 fn parse_speed(speed_str: &str) -> PortSpeed {
     match speed_str.trim() {
@@ -41,9 +150,7 @@ pub(crate) fn ports_list(devices: &[Device], wan_interface: Option<&str>) -> Vec
         let mac = device.mac.to_lowercase();
         if let Some(iface) = mac_to_iface.get(&mac) {
             let conn = PortConnection {
-                mac,
-                ip: device.ip.clone(),
-                hostname: device.hostname.clone(),
+                device_id: DeviceRuntime::id_for_mac(&mac),
             };
             iface_to_connections
                 .entry(iface.clone())
@@ -76,7 +183,6 @@ pub(crate) fn ports_list(devices: &[Device], wan_interface: Option<&str>) -> Vec
         let connections = iface_to_connections.remove(&iface).unwrap_or_default();
         ports.push(PhysicalPort {
             id: iface.clone(),
-            name: iface.clone(),
             port_type: PortType::Lan,
             speed,
             connections,
@@ -101,7 +207,6 @@ pub(crate) fn ports_list(devices: &[Device], wan_interface: Option<&str>) -> Vec
         let connections = iface_to_connections.remove(&wan).unwrap_or_default();
         ports.push(PhysicalPort {
             id: wan.clone(),
-            name: wan.clone(),
             port_type: PortType::Wan,
             speed,
             connections,

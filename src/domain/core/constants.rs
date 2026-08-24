@@ -7,7 +7,7 @@ pub const CLOUDFLARE_DEFAULT_TTL: u32 = 60;
 pub const DUCKDNS_API_URL_PREFIX: &str = "https://www.duckdns.org/update";
 
 pub const MESH_EXTENDER_RETRY_SECS: u64 = 3;
-pub const MESH_EXTENDER_TELEMETRY_SECS: u64 = 10;
+pub const MESH_EXTENDER_TELEMETRY_SECS: u64 = 1;
 pub const TRAFFIC_SAMPLING_INTERVAL_SECS: u64 = 1;
 pub const MAX_WAN_QOS_KBPS: u32 = 10_000_000;
 pub const HTTP_TIMEOUT_SECS: u64 = 15;

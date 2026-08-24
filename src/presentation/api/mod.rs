@@ -12,6 +12,7 @@ pub mod ports;
 pub mod state;
 pub mod subscribe;
 pub mod system;
+pub mod traffic;
 pub mod wan;
 pub mod wifi;
 
@@ -27,11 +28,14 @@ pub const UBUS_METHODS: &[&str] = &[
     "wan.set",
     "wan.set_config",
     "ports.list",
+    "ports.switch.get",
+    "ports.switch.hw_offload.set",
+    "traffic.get",
     "system.info",
     "devices.list",
     "devices.register",
     "devices.update",
-    "devices.delete",
+    "devices.unregister",
     "devices.add_port_forward",
     "devices.remove_port_forward",
     "dns.get",
@@ -84,6 +88,8 @@ pub fn dispatch(app: &Arc<App>, method: &str, request_json: &str) -> String {
         wan::dispatch(app, method, request)
     } else if method.starts_with("ports.") {
         ports::dispatch(app, method, request)
+    } else if method.starts_with("traffic.") {
+        traffic::dispatch(app, method, request)
     } else if method.starts_with("maintenance.") {
         maintenance::dispatch(app, method, request)
     } else if method.starts_with("devices.") {

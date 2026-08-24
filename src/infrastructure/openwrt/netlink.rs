@@ -15,7 +15,7 @@ pub fn start_neighbor_listener(app: Arc<App>) {
             Err(_) => return,
         };
 
-        // Subscribe to both IPv4 and IPv6 neighbor events.
+        // RTMGRP_NEIGH carries IPv4/IPv6 neighbour records and bridge FDB updates.
         let addr = SocketAddr::new(0, libc::RTMGRP_NEIGH as u32);
         if connection.socket_mut().socket_mut().bind(&addr).is_err() {
             return;
@@ -24,49 +24,54 @@ pub fn start_neighbor_listener(app: Arc<App>) {
         tokio::spawn(connection);
 
         while let Some((message, _)) = messages.next().await {
-            if let NetlinkPayload::InnerMessage(RouteNetlinkMessage::NewNeighbour(msg)) =
-                message.payload
-            {
-                let is_ipv4 = msg.header.family == AddressFamily::Inet;
-                let is_ipv6 = msg.header.family == AddressFamily::Inet6;
-                if !is_ipv4 && !is_ipv6 {
-                    continue;
-                }
+            let msg = match message.payload {
+                NetlinkPayload::InnerMessage(RouteNetlinkMessage::NewNeighbour(msg))
+                | NetlinkPayload::InnerMessage(RouteNetlinkMessage::DelNeighbour(msg)) => msg,
+                _ => continue,
+            };
+            let is_ipv4 = msg.header.family == AddressFamily::Inet;
+            let is_ipv6 = msg.header.family == AddressFamily::Inet6;
+            let is_bridge = msg.header.family == AddressFamily::Bridge;
+            if !is_ipv4 && !is_ipv6 && !is_bridge {
+                continue;
+            }
 
-                let mut mac_opt: Option<String> = None;
-                let mut ip_opt: Option<String> = None;
-                let mut ip6_opt: Option<String> = None;
+            let mut mac_opt: Option<String> = None;
+            let mut ip_opt: Option<String> = None;
+            let mut ip6_opt: Option<String> = None;
 
-                for attr in msg.attributes {
-                    match attr {
-                        NeighbourAttribute::LinkLayerAddress(mac) => {
-                            let s = mac
-                                .iter()
-                                .map(|b| format!("{b:02x}"))
-                                .collect::<Vec<_>>()
-                                .join(":");
-                            mac_opt = Some(s);
-                        }
-                        NeighbourAttribute::Destination(NeighbourAddress::Inet(ip)) => {
-                            ip_opt = Some(ip.to_string());
-                        }
-                        // Link-local addresses are not useful as forwarding destinations.
-                        NeighbourAttribute::Destination(NeighbourAddress::Inet6(ip))
-                            if !ip.is_unicast_link_local() =>
-                        {
-                            ip6_opt = Some(ip.to_string());
-                        }
-                        _ => {}
+            for attr in msg.attributes {
+                match attr {
+                    NeighbourAttribute::LinkLayerAddress(mac) => {
+                        let s = mac
+                            .iter()
+                            .map(|b| format!("{b:02x}"))
+                            .collect::<Vec<_>>()
+                            .join(":");
+                        mac_opt = Some(s);
                     }
-                }
-
-                if let Some(mac) = mac_opt {
-                    if ip_opt.is_some() || ip6_opt.is_some() {
-                        let app = Arc::clone(&app);
-                        tokio::task::spawn_blocking(move || {
-                            app.devices_sync_ip(&mac, ip_opt.as_deref(), ip6_opt.as_deref());
-                        });
+                    NeighbourAttribute::Destination(NeighbourAddress::Inet(ip)) => {
+                        ip_opt = Some(ip.to_string());
                     }
+                    NeighbourAttribute::Destination(NeighbourAddress::Inet6(ip))
+                        if !ip.is_unicast_link_local() =>
+                    {
+                        ip6_opt = Some(ip.to_string());
+                    }
+                    _ => {}
+                }
+            }
+
+            if let Some(mac) = mac_opt {
+                if is_bridge {
+                    let app = Arc::clone(&app);
+                    tokio::task::spawn_blocking(move || app.refresh_devices(true));
+                } else if ip_opt.is_some() || ip6_opt.is_some() {
+                    let app = Arc::clone(&app);
+                    tokio::task::spawn_blocking(move || {
+                        app.devices_sync_ip(&mac, ip_opt.as_deref(), ip6_opt.as_deref());
+                        app.refresh_devices(true);
+                    });
                 }
             }
         }

@@ -38,6 +38,7 @@ async fn main() -> Result<()> {
     let (event_tx, event_rx) = tokio::sync::broadcast::channel(128);
     let app = App::bootstrap(backend, StateStore::new(state_dir), event_tx.clone());
     app.start_background();
+    app.start_state_publisher();
 
     unetic_core::application::ddns_watcher::start_ddns_watcher(
         Arc::clone(&app),
@@ -46,7 +47,6 @@ async fn main() -> Result<()> {
 
     if !is_memory {
         unetic_core::infrastructure::openwrt::netlink::start_neighbor_listener(Arc::clone(&app));
-        unetic_core::application::traffic_sampler::start_traffic_sampler(Arc::clone(&app));
     }
 
     unetic_core::application::mesh_sync::start_mesh_sync(Arc::clone(&app), event_tx.subscribe());

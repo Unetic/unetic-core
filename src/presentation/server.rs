@@ -1,7 +1,7 @@
 use std::{sync::Arc, time::Duration};
-use tokio::sync::broadcast::Receiver;
+use tokio::sync::broadcast::{Receiver, error::RecvError};
 use tracing::{error, info, warn};
-use unetic_openwrt_sys::Bridge;
+use unetic_openwrt_sys::{Bridge, Server};
 
 use crate::application::app::App;
 use crate::domain::PublicState;
@@ -42,34 +42,18 @@ pub async fn run_event_loop(
                     error!(%error, "ubus server poll failed");
                     tokio::time::sleep(Duration::from_millis(250)).await;
                 }
-
-                while let Ok(state) = event_rx.try_recv() {
-                    match serde_json::to_string(&state) {
-                        Ok(json) => {
-                            if let Err(error) = server.notify("state.changed", &json) {
-                                warn!(%error, "failed to publish state.changed");
-                            }
-                        }
-                        Err(error) => error!(%error, "failed to serialize state notification"),
+            }
+            event = event_rx.recv() => {
+                let state = match event {
+                    Ok(state) => state,
+                    Err(RecvError::Lagged(skipped)) => {
+                        warn!(skipped, "state event receiver lagged");
+                        continue;
                     }
+                    Err(RecvError::Closed) => break,
+                };
 
-                    if app.has_active_subscribers() {
-                        if let Ok(state_val) = serde_json::to_value(&state) {
-                            if let Some(last) = &last_state {
-                                if let Some(diff) = crate::application::diff::json_diff(last, &state_val) {
-                                    if let Ok(diff_json) = serde_json::to_string(&diff) {
-                                        if let Err(error) = server.notify("state.patched", &diff_json) {
-                                            warn!(%error, "failed to publish state.patched");
-                                        }
-                                    }
-                                }
-                            }
-                            last_state = Some(state_val);
-                        }
-                    } else {
-                        last_state = None;
-                    }
-                }
+                notify_state(&mut server, &app, &mut last_state, &state);
             }
         }
     }
@@ -77,6 +61,48 @@ pub async fn run_event_loop(
     info!("shutting down");
     app.shutdown();
     Ok(())
+}
+
+fn notify_state(
+    server: &mut Server,
+    app: &App,
+    previous: &mut Option<serde_json::Value>,
+    state: &PublicState,
+) {
+    if !app.has_active_subscribers() {
+        *previous = None;
+        return;
+    }
+    let Ok(current) = serde_json::to_value(state) else {
+        return;
+    };
+    match previous.as_ref() {
+        Some(previous) => notify_patch(server, previous, &current),
+        None => notify_changed(server, state),
+    }
+    *previous = Some(current);
+}
+
+fn notify_changed(server: &mut Server, state: &PublicState) {
+    let Ok(json) = serde_json::to_string(state) else {
+        error!("failed to serialize state notification");
+        return;
+    };
+    if let Err(error) = server.notify("state.changed", &json) {
+        warn!(%error, "failed to publish state.changed");
+    }
+}
+
+fn notify_patch(server: &mut Server, previous: &serde_json::Value, current: &serde_json::Value) {
+    let Some(diff) = crate::application::diff::json_diff(previous, current) else {
+        return;
+    };
+    let Ok(json) = serde_json::to_string(&diff) else {
+        return;
+    };
+    if let Err(error) = server.notify("state.patched", &json) {
+        warn!(%error, "failed to publish state.patched");
+    }
 }
 
 async fn wait_for_signal() -> anyhow::Result<()> {

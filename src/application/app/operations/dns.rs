@@ -1,7 +1,7 @@
 use std::net::IpAddr;
 
 use crate::{
-    application::app::App,
+    application::app::{App, StateTopic},
     domain::{
         DnsConfig, DnsRecord,
         errors::{ErrorCode, ErrorStage, LegacyAppError},
@@ -58,7 +58,7 @@ impl App {
         }
 
         self.inner.lock().expect("app state poisoned").config = new_config;
-        self.publish();
+        self.publish(StateTopic::Dns);
         Ok(())
     }
 }

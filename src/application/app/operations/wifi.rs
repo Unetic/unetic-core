@@ -1,7 +1,7 @@
 use tracing::error;
 
 use crate::{
-    application::app::{App, Inner},
+    application::app::{App, Inner, StateTopic},
     application::state::now_ms,
     application::transaction::ChangeContext,
     domain::errors::{ErrorCode, ErrorStage, LegacyAppError},
@@ -34,7 +34,7 @@ impl App {
                 active.error = error;
             }
         }
-        self.publish();
+        self.publish(StateTopic::Wifi);
         Ok(())
     }
 
@@ -84,7 +84,7 @@ impl App {
             let mut inner = self.inner.lock().expect("app state poisoned");
             apply_wifi_success_state(&mut inner, context, last, store_error);
         }
-        self.publish();
+        self.publish(StateTopic::Wifi);
         Ok(())
     }
 
@@ -129,7 +129,7 @@ impl App {
             );
         }
         self.refresh_observed();
-        self.publish();
+        self.publish(StateTopic::Wifi);
     }
 
     pub(crate) fn mark_commit_uncertain(&self, context: &ChangeContext, error: LegacyAppError) {
@@ -167,7 +167,7 @@ impl App {
             inner.health.core = "error".into();
             inner.last_system_error = Some(uncertain);
         }
-        self.publish();
+        self.publish(StateTopic::Wifi);
     }
 
     pub(crate) fn mark_degraded(&self, error: LegacyAppError) {
@@ -178,7 +178,7 @@ impl App {
             inner.health.core = "error".into();
             inner.last_system_error = Some(error);
         }
-        self.publish();
+        self.publish(StateTopic::Wifi);
     }
 
     pub(crate) fn record_recovered_operation(

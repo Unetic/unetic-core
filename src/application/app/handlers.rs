@@ -2,7 +2,7 @@ use std::{sync::Arc, thread};
 
 use serde_json::json;
 
-use super::{App, Inner};
+use super::{App, Inner, StateTopic};
 use crate::application::state::{now_ms, validate_wifi_config};
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
@@ -71,7 +71,7 @@ impl App {
         };
 
         if let Some(accepted) = noop_result {
-            self.publish();
+            self.publish(StateTopic::Operation);
             return Ok(accepted);
         }
 
@@ -92,7 +92,7 @@ impl App {
                 .with_operation(&context.operation_id, context.request_id.as_deref())
                 .into());
         }
-        self.publish();
+            self.publish(StateTopic::Operation);
 
         let operation_id = context.operation_id.clone();
         let app = Arc::clone(self);

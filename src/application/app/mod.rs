@@ -1,15 +1,16 @@
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, AtomicUsize, Ordering},
     },
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use serde_json::json;
 use tokio::sync::broadcast::Sender;
 
+use crate::domain::system::SystemRuntime;
 use crate::{
     domain::errors::LegacyAppError,
     domain::{
@@ -68,6 +69,9 @@ pub(crate) struct Inner {
     pub event_seq: u64,
     pub boot_id: String,
     pub health: HealthState,
+    pub system_info: crate::domain::system::SystemInfo,
+    pub system_runtime: SystemRuntime,
+    pub devices: crate::domain::device_inventory::DeviceInventory,
     pub repair_failures: u8,
     pub traffic: crate::domain::traffic::TrafficState,
     pub ddns_status: crate::domain::DdnsStatus,
@@ -82,14 +86,43 @@ pub(crate) struct Inner {
     pub extender_pairing_key: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum StateTopic {
+    SystemRuntime,
+    Wifi,
+    Wan,
+    Dns,
+    Devices,
+    Traffic,
+    Ddns,
+    Extenders,
+    Operation,
+    Maintenance,
+    Reconciliation,
+    General,
+}
+
+pub(crate) struct PendingStateUpdate {
+    pub state: PublicState,
+    pub topics: BTreeSet<StateTopic>,
+}
+
+pub(crate) struct StateUpdateBuffer {
+    pub pending: Option<PendingStateUpdate>,
+    pub last_sent_at: Option<Instant>,
+}
+
 pub struct App {
     pub(crate) backend: Arc<dyn RouterBackend>,
     pub(crate) store: StateStore,
     pub(crate) inner: Mutex<Inner>,
     pub(crate) event_tx: Sender<PublicState>,
+    pub(crate) state_updates: Mutex<StateUpdateBuffer>,
     pub(crate) shutdown: AtomicBool,
+    pub(crate) device_refreshing: AtomicBool,
     pub(crate) op_counter: AtomicUsize,
     pub(crate) timing: Timing,
+    pub(crate) traffic_sampler: Mutex<crate::application::traffic_sampler::TrafficSampler>,
     pub subscriptions: crate::application::subscription::SubscriptionManager,
 }
 
@@ -116,6 +149,12 @@ impl App {
 
         let boot_id = generate_id("boot");
         let wan_status = backend.read_wan_runtime_status().unwrap_or_default();
+        let system_info = backend.read_system_info().unwrap_or_default();
+        let system_runtime = backend.read_system_runtime().unwrap_or_default();
+        let devices = store
+            .load_device_inventory()
+            .unwrap_or_default()
+            .unwrap_or_default();
         let initial_core_health = if lifecycle == Lifecycle::Degraded {
             "error".into()
         } else {
@@ -148,8 +187,11 @@ impl App {
                     wireless: "unknown".into(),
                     wan: "ok".into(),
                 },
+                system_info,
+                system_runtime,
+                devices,
                 repair_failures: 0,
-                traffic: crate::domain::traffic::TrafficState::default(),
+                traffic: crate::application::traffic_sampler::load_history(),
                 ddns_status: crate::domain::DdnsStatus::default(),
                 extender_ports: std::collections::HashMap::new(),
                 extender_clients: std::collections::HashMap::new(),
@@ -160,9 +202,15 @@ impl App {
                 extender_pairing_key: uuid::Uuid::new_v4().simple().to_string()[..8].to_owned(),
             }),
             event_tx,
+            state_updates: Mutex::new(StateUpdateBuffer {
+                pending: None,
+                last_sent_at: None,
+            }),
             shutdown: AtomicBool::new(false),
+            device_refreshing: AtomicBool::new(false),
             op_counter: AtomicUsize::new(1),
             timing,
+            traffic_sampler: Mutex::new(crate::application::traffic_sampler::TrafficSampler::new()),
             subscriptions: crate::application::subscription::SubscriptionManager::new(),
         });
 
@@ -178,6 +226,7 @@ impl App {
         } else {
             self.refresh_observed();
         }
+        self.refresh_devices(false);
 
         {
             let mut inner = self.inner.lock().expect("app state poisoned");
@@ -185,7 +234,7 @@ impl App {
                 inner.lifecycle = Lifecycle::Ready;
             }
         }
-        self.publish();
+        self.publish(StateTopic::General);
     }
 
     pub fn shutdown(&self) {
@@ -226,8 +275,31 @@ impl App {
         self.backend.ports_list()
     }
 
+    pub fn traffic(&self) -> crate::domain::traffic::TrafficState {
+        self.inner
+            .lock()
+            .expect("app state poisoned")
+            .traffic
+            .clone()
+    }
+
+    pub fn switch_state(&self) -> Result<crate::domain::ports::SwitchState, LegacyAppError> {
+        self.backend.read_switch_state()
+    }
+
+    pub fn set_hw_offload(
+        &self,
+        enabled: bool,
+    ) -> Result<crate::domain::ports::SwitchState, LegacyAppError> {
+        self.backend.set_hw_offload(enabled)
+    }
+
     pub fn system_info(&self) -> crate::domain::system::SystemInfo {
-        self.backend.read_system_info().unwrap_or_default()
+        self.inner
+            .lock()
+            .expect("app state poisoned")
+            .system_info
+            .clone()
     }
 
     pub fn devices_list(&self) -> Result<Vec<crate::domain::device::Device>, LegacyAppError> {
@@ -239,6 +311,54 @@ impl App {
             )
         };
         self.backend.read_devices(&extenders, &extender_clients)
+    }
+
+    pub(crate) fn refresh_devices(&self, publish: bool) {
+        if self
+            .device_refreshing
+            .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
+            .is_err()
+        {
+            return;
+        }
+
+        let (devices, registered_macs) = {
+            let devices = self.devices_list();
+            let registered_macs = self
+                .inner
+                .lock()
+                .expect("app state poisoned")
+                .config
+                .registered_devices
+                .iter()
+                .map(|device| device.mac.clone())
+                .collect::<Vec<_>>();
+            (devices, registered_macs)
+        };
+        self.device_refreshing.store(false, Ordering::Release);
+
+        let Ok(devices) = devices else {
+            return;
+        };
+
+        let now_ms = crate::application::state::now_ms();
+        let (changed, inventory) = {
+            let mut inner = self.inner.lock().expect("app state poisoned");
+            let changed = inner
+                .devices
+                .replace_snapshot(devices, &registered_macs, now_ms);
+            (changed, inner.devices.clone())
+        };
+        if !changed {
+            return;
+        }
+
+        if let Err(error) = self.store.persist_device_inventory(&inventory) {
+            tracing::warn!(%error, "failed to persist device inventory");
+        }
+        if publish {
+            self.publish(StateTopic::Devices);
+        }
     }
 
     pub fn has_active_subscribers(&self) -> bool {

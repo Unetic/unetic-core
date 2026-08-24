@@ -7,6 +7,7 @@ mod rpc;
 pub mod dns;
 pub mod netlink;
 pub(crate) mod system;
+mod temperature;
 pub mod traffic;
 pub mod wan;
 mod wireless;

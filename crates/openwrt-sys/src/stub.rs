@@ -20,11 +20,7 @@ impl Bridge {
         ))
     }
 
-    pub fn server<F>(
-        &self,
-        _methods: &[&str],
-        _handler: F,
-    ) -> Result<Server, BridgeError>
+    pub fn server<F>(&self, _methods: &[&str], _handler: F) -> Result<Server, BridgeError>
     where
         F: Fn(&str, &str) -> String + Send + Sync + 'static,
     {

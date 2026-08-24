@@ -5,15 +5,16 @@ use serde_json::{Value, json};
 
 use crate::{
     application::app::App,
-    domain::device::{Device, PortForward, RegisteredDevice},
+    domain::{
+        device::{PortForward, PortForwardProtocol, RegisteredDevice},
+        device_inventory::DeviceRuntime,
+    },
 };
 
 #[derive(Serialize)]
 struct DeviceView {
     #[serde(flatten)]
-    device: Device,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    uuid: Option<String>,
+    runtime: DeviceRuntime,
     #[serde(skip_serializing_if = "Option::is_none")]
     name: Option<String>,
     is_static_ip: bool,
@@ -22,13 +23,13 @@ struct DeviceView {
 
 #[derive(Deserialize)]
 struct RegisterRequest {
-    mac: String,
+    id: String,
     name: String,
 }
 
 #[derive(Deserialize)]
 struct UpdateRequest {
-    uuid: String,
+    id: String,
     name: String,
     is_static_ip: bool,
 }
@@ -37,24 +38,24 @@ struct UpdateRequest {
 struct NewPortForward {
     external_port: u32,
     internal_port: u32,
-    protocol: String,
+    protocol: PortForwardProtocol,
 }
 
 #[derive(Deserialize)]
 struct AddPortForwardRequest {
-    uuid: String,
+    id: String,
     port_forward: NewPortForward,
 }
 
 #[derive(Deserialize)]
 struct RemovePortForwardRequest {
-    uuid: String,
+    id: String,
     pf_id: String,
 }
 
 #[derive(Deserialize)]
-struct DeleteRequest {
-    uuid: String,
+struct UnregisterRequest {
+    id: String,
 }
 
 pub fn dispatch(app: &Arc<App>, method: &str, request: Value) -> Result<Value, u32> {
@@ -62,9 +63,10 @@ pub fn dispatch(app: &Arc<App>, method: &str, request: Value) -> Result<Value, u
         "devices.list" => list_devices(app),
         "devices.register" => {
             let request: RegisterRequest = serde_json::from_value(request).map_err(|_| 1_u32)?;
+            let mac = device_mac(app, &request.id)?;
             app.register_device(RegisteredDevice {
-                uuid: uuid::Uuid::new_v4().to_string(),
-                mac: request.mac,
+                id: request.id,
+                mac,
                 name: request.name,
                 is_static_ip: false,
                 port_forwards: Vec::new(),
@@ -74,16 +76,16 @@ pub fn dispatch(app: &Arc<App>, method: &str, request: Value) -> Result<Value, u
         }
         "devices.update" => {
             let request: UpdateRequest = serde_json::from_value(request).map_err(|_| 1_u32)?;
-            let mut device = registered_device(app, &request.uuid)?;
+            let mut device = registered_device(app, &request.id)?;
             device.name = request.name;
             device.is_static_ip = request.is_static_ip;
-            app.update_device(&request.uuid, device)
+            app.update_device(&device.id, device.clone())
                 .map(|()| json!({}))
                 .map_err(|_| 1)
         }
-        "devices.delete" => {
-            let request: DeleteRequest = serde_json::from_value(request).map_err(|_| 1_u32)?;
-            app.delete_device(&request.uuid)
+        "devices.unregister" => {
+            let request: UnregisterRequest = serde_json::from_value(request).map_err(|_| 1_u32)?;
+            app.unregister_device(&request.id)
                 .map(|()| json!({}))
                 .map_err(|_| 1)
         }
@@ -96,14 +98,16 @@ pub fn dispatch(app: &Arc<App>, method: &str, request: Value) -> Result<Value, u
                 internal_port: request.port_forward.internal_port,
                 protocol: request.port_forward.protocol,
             };
-            app.add_port_forward(&request.uuid, rule)
+            let device = registered_device(app, &request.id)?;
+            app.add_port_forward(&device.id, rule)
                 .map(|()| json!({}))
                 .map_err(|_| 1)
         }
         "devices.remove_port_forward" => {
             let request: RemovePortForwardRequest =
                 serde_json::from_value(request).map_err(|_| 1_u32)?;
-            app.remove_port_forward(&request.uuid, &request.pf_id)
+            let device = registered_device(app, &request.id)?;
+            app.remove_port_forward(&device.id, &request.pf_id)
                 .map(|()| json!({}))
                 .map_err(|_| 1)
         }
@@ -112,17 +116,17 @@ pub fn dispatch(app: &Arc<App>, method: &str, request: Value) -> Result<Value, u
 }
 
 fn list_devices(app: &App) -> Result<Value, u32> {
-    let registered = app.state().registered_devices;
-    let devices = app.devices_list().map_err(|_| 1_u32)?;
+    let state = app.state();
+    let registered = state.registered_devices;
+    let devices = state.devices;
     let views: Vec<DeviceView> = devices
         .into_iter()
-        .map(|device| {
+        .map(|runtime| {
             let registration = registered
                 .iter()
-                .find(|registered| registered.mac.eq_ignore_ascii_case(&device.mac));
+                .find(|registered| registered.mac.eq_ignore_ascii_case(&runtime.device.mac));
             DeviceView {
-                device,
-                uuid: registration.map(|registered| registered.uuid.clone()),
+                runtime,
                 name: registration.map(|registered| registered.name.clone()),
                 is_static_ip: registration.is_some_and(|registered| registered.is_static_ip),
                 port_forwards: registration
@@ -134,11 +138,20 @@ fn list_devices(app: &App) -> Result<Value, u32> {
     Ok(json!(views))
 }
 
-fn registered_device(app: &App, uuid: &str) -> Result<RegisteredDevice, u32> {
+fn registered_device(app: &App, id: &str) -> Result<RegisteredDevice, u32> {
     app.state()
         .registered_devices
         .into_iter()
-        .find(|device| device.uuid == uuid)
+        .find(|device| device.id == id)
+        .ok_or(1)
+}
+
+fn device_mac(app: &App, id: &str) -> Result<String, u32> {
+    app.state()
+        .devices
+        .into_iter()
+        .find(|device| device.id == id)
+        .map(|device| device.device.mac)
         .ok_or(1)
 }
 
@@ -171,7 +184,7 @@ mod tests {
         let response = call(
             &app,
             "devices.register",
-            json!({"mac": "00:11:22:33:44:55", "name": "Phone"}),
+            json!({"id": "device-001122334455", "name": "Phone"}),
         );
         assert_eq!(response["error"], 0);
 
@@ -180,13 +193,15 @@ mod tests {
             .as_array()
             .and_then(|devices| devices.first())
             .expect("registered device in list");
-        let uuid = device["uuid"].as_str().expect("generated UUID");
+        let id = device["id"].as_str().expect("device ID");
         assert_eq!(device["name"], "Phone");
+        assert_eq!(device["registered"], true);
+        assert!(device.get("uuid").is_none());
 
         let response = call(
             &app,
             "devices.update",
-            json!({"uuid": uuid, "name": "Work phone", "is_static_ip": true}),
+            json!({"id": id, "name": "Work phone", "is_static_ip": true}),
         );
         assert_eq!(response["error"], 0);
 
@@ -194,7 +209,7 @@ mod tests {
             &app,
             "devices.add_port_forward",
             json!({
-                "uuid": uuid,
+                "id": id,
                 "port_forward": {
                     "external_port": 8443,
                     "internal_port": 443,
@@ -218,6 +233,13 @@ mod tests {
             &app,
             "devices.register",
             json!({"uuid": "client-id", "name": "Missing MAC"}),
+        );
+        assert_eq!(response["error"], 1);
+
+        let response = call(
+            &app,
+            "devices.register",
+            json!({"mac": "00:11:22:33:44:55", "name": "Legacy request"}),
         );
         assert_eq!(response["error"], 1);
 

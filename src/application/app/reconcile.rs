@@ -6,7 +6,7 @@ use std::{
 
 use tracing::warn;
 
-use super::{App, Inner};
+use super::{App, Inner, StateTopic};
 use crate::application::state::all_equal_config;
 use crate::{
     application::transaction::ChangeContext,
@@ -66,10 +66,10 @@ impl App {
         };
 
         if let Some(repair) = repair {
-            self.publish();
+            self.publish(StateTopic::Reconciliation);
             self.spawn_repair_task(repair);
         } else if should_publish {
-            self.publish();
+            self.publish(StateTopic::Reconciliation);
         }
     }
 
@@ -128,7 +128,7 @@ impl App {
             inner.health.core = "error".into();
         }
         drop(inner);
-        self.publish();
+        self.publish(StateTopic::Reconciliation);
     }
 
     fn run_runtime_repair(&self, targets: Vec<String>, ssid: String) {
@@ -157,7 +157,7 @@ impl App {
         }
 
         drop(inner);
-        self.publish();
+        self.publish(StateTopic::Reconciliation);
     }
 
     fn repair_runtime(&self, targets: &[String], ssid: &str) -> Result<(), LegacyAppError> {

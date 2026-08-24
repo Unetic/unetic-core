@@ -1,62 +1,165 @@
-use std::{collections::HashMap, sync::Arc, time::Duration};
-
-use crate::{
-    application::App,
-    domain::traffic::{IfaceStats, TrafficState},
-    infrastructure::openwrt::traffic::read_iface_counters,
+use std::{
+    fs,
+    path::Path,
+    time::{SystemTime, UNIX_EPOCH},
 };
 
-pub fn start_traffic_sampler(app: Arc<App>) {
-    tokio::spawn(async move {
-        let mut interval = tokio::time::interval(Duration::from_secs(
-            crate::domain::TRAFFIC_SAMPLING_INTERVAL_SECS,
-        ));
-        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-        let mut previous = read_iface_counters();
-        let mut sampled_at = tokio::time::Instant::now();
+use crate::domain::traffic::{
+    TrafficBytes, TrafficCharts, TrafficCounters, TrafficPoint, TrafficSource, TrafficState,
+    push_point, rate,
+};
 
-        loop {
-            interval.tick().await;
-            let current = read_iface_counters();
-            let now = tokio::time::Instant::now();
-            let ifaces = calculate_rates(&previous, &current, now.duration_since(sampled_at));
-            previous = current;
-            sampled_at = now;
-            app.update_traffic(TrafficState {
-                ifaces,
-                devices: HashMap::new(),
-            });
-        }
-    });
+const HISTORY_PATH: &str = "/tmp/unetic/traffic-history.json";
+type ChartPoints = fn(&mut TrafficCharts) -> &mut Vec<TrafficPoint>;
+type TrafficBucket = (u64, ChartPoints);
+
+const BUCKETS: [TrafficBucket; 5] = [
+    (1_000, |charts| &mut charts.one_minute),
+    (15_000, |charts| &mut charts.fifteen_minutes),
+    (60_000, |charts| &mut charts.one_hour),
+    (1_440_000, |charts| &mut charts.twenty_four_hours),
+    (10_080_000, |charts| &mut charts.seven_days),
+];
+
+#[derive(Debug, Clone, Copy, Default)]
+struct BucketAccumulator {
+    bytes: TrafficBytes,
+    elapsed_ms: u64,
 }
 
-fn calculate_rates(
-    previous: &HashMap<String, (u64, u64)>,
-    current: &HashMap<String, (u64, u64)>,
-    elapsed: Duration,
-) -> HashMap<String, IfaceStats> {
-    let elapsed_millis = u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX);
-    if elapsed_millis == 0 {
-        return HashMap::new();
+#[derive(Debug)]
+pub(crate) struct TrafficSampler {
+    previous: Option<TrafficCounters>,
+    sampled_at: Option<std::time::Instant>,
+    wan_buckets: [BucketAccumulator; 5],
+    lan_buckets: [BucketAccumulator; 5],
+    all_buckets: [BucketAccumulator; 5],
+}
+
+impl TrafficSampler {
+    pub(crate) fn new() -> Self {
+        Self {
+            previous: None,
+            sampled_at: None,
+            wan_buckets: [BucketAccumulator::default(); 5],
+            lan_buckets: [BucketAccumulator::default(); 5],
+            all_buckets: [BucketAccumulator::default(); 5],
+        }
     }
 
-    current
-        .iter()
-        .filter_map(|(interface, &(rx, tx))| {
-            let &(previous_rx, previous_tx) = previous.get(interface)?;
-            Some((
-                interface.clone(),
-                IfaceStats {
-                    rx_bps: bytes_per_second(rx.saturating_sub(previous_rx), elapsed_millis),
-                    tx_bps: bytes_per_second(tx.saturating_sub(previous_tx), elapsed_millis),
-                },
-            ))
-        })
-        .collect()
+    pub(crate) fn sample(
+        &mut self,
+        current: TrafficCounters,
+        hw_offload_enabled: bool,
+        state: &mut TrafficState,
+    ) -> bool {
+        let now = std::time::Instant::now();
+        let Some(previous) = self.previous.replace(current) else {
+            self.sampled_at = Some(now);
+            state.lan.hw_offload_enabled = hw_offload_enabled;
+            return false;
+        };
+        let elapsed_ms = self
+            .sampled_at
+            .replace(now)
+            .map(|at| u64::try_from(now.duration_since(at).as_millis()).unwrap_or(u64::MAX))
+            .unwrap_or(0);
+        if elapsed_ms == 0 {
+            return false;
+        }
+        let wan = delta(previous.wan, current.wan);
+        let lan = delta(previous.lan, current.lan);
+        let all = wan + lan;
+        let at_ms = now_ms();
+        update_source(
+            &mut state.wan,
+            wan,
+            elapsed_ms,
+            at_ms,
+            &mut self.wan_buckets,
+        );
+        update_source(
+            &mut state.lan.source,
+            lan,
+            elapsed_ms,
+            at_ms,
+            &mut self.lan_buckets,
+        );
+        update_source(
+            &mut state.all,
+            all,
+            elapsed_ms,
+            at_ms,
+            &mut self.all_buckets,
+        );
+        state.lan.hw_offload_enabled = hw_offload_enabled;
+        true
+    }
 }
 
-fn bytes_per_second(bytes: u64, elapsed_millis: u64) -> u64 {
-    bytes.saturating_mul(1_000) / elapsed_millis
+fn delta(previous: TrafficBytes, current: TrafficBytes) -> TrafficBytes {
+    TrafficBytes {
+        rx: current.rx.saturating_sub(previous.rx),
+        tx: current.tx.saturating_sub(previous.tx),
+    }
+}
+
+fn update_source(
+    source: &mut TrafficSource,
+    bytes: TrafficBytes,
+    elapsed_ms: u64,
+    at_ms: u64,
+    buckets: &mut [BucketAccumulator; 5],
+) {
+    source.realtime = rate(bytes, elapsed_ms);
+    for (index, (bucket_ms, points)) in BUCKETS.iter().enumerate() {
+        let bucket = &mut buckets[index];
+        bucket.bytes = bucket.bytes + bytes;
+        bucket.elapsed_ms = bucket.elapsed_ms.saturating_add(elapsed_ms);
+        if bucket.elapsed_ms >= *bucket_ms {
+            let point_rate = rate(bucket.bytes, bucket.elapsed_ms);
+            push_point(
+                points(&mut source.charts),
+                TrafficPoint {
+                    at_ms,
+                    rx_kbps: point_rate.rx_kbps,
+                    tx_kbps: point_rate.tx_kbps,
+                },
+            );
+            *bucket = BucketAccumulator::default();
+        }
+    }
+}
+
+pub(crate) fn load_history() -> TrafficState {
+    fs::read(HISTORY_PATH)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        .unwrap_or_default()
+}
+
+pub(crate) fn save_history(state: &TrafficState) {
+    let path = Path::new(HISTORY_PATH);
+    let Some(parent) = path.parent() else {
+        return;
+    };
+    if fs::create_dir_all(parent).is_err() {
+        return;
+    }
+    let Ok(bytes) = serde_json::to_vec(state) else {
+        return;
+    };
+    let temporary = path.with_extension("json.tmp");
+    if fs::write(&temporary, bytes).is_ok() {
+        let _ = fs::rename(temporary, path);
+    }
+}
+
+fn now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| u64::try_from(duration.as_millis()).unwrap_or(u64::MAX))
+        .unwrap_or(0)
 }
 
 #[cfg(test)]
@@ -64,13 +167,41 @@ mod tests {
     use super::*;
 
     #[test]
-    fn calculates_bytes_per_second_using_actual_interval() {
-        let previous = HashMap::from([("eth0".to_owned(), (1_000, 2_000))]);
-        let current = HashMap::from([("eth0".to_owned(), (2_000, 2_500))]);
-
-        let rates = calculate_rates(&previous, &current, Duration::from_millis(500));
-
-        assert_eq!(rates["eth0"].rx_bps, 2_000);
-        assert_eq!(rates["eth0"].tx_bps, 1_000);
+    fn all_is_derived_from_wan_and_lan_deltas() {
+        let mut sampler = TrafficSampler::new();
+        let mut state = TrafficState::default();
+        sampler.sample(
+            TrafficCounters {
+                wan: TrafficBytes {
+                    rx: 1_000,
+                    tx: 2_000,
+                },
+                lan: TrafficBytes {
+                    rx: 3_000,
+                    tx: 4_000,
+                },
+            },
+            false,
+            &mut state,
+        );
+        sampler.sampled_at = Some(std::time::Instant::now() - std::time::Duration::from_secs(1));
+        sampler.sample(
+            TrafficCounters {
+                wan: TrafficBytes {
+                    rx: 2_024,
+                    tx: 3_024,
+                },
+                lan: TrafficBytes {
+                    rx: 5_048,
+                    tx: 6_048,
+                },
+            },
+            true,
+            &mut state,
+        );
+        assert_eq!(state.wan.realtime.rx_kbps, 1);
+        assert_eq!(state.lan.source.realtime.rx_kbps, 2);
+        assert_eq!(state.all.realtime.rx_kbps, 3);
+        assert!(state.lan.hw_offload_enabled);
     }
 }
